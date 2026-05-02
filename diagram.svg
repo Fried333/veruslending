@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2000" font-family="system-ui, -apple-system, sans-serif">
+  <style>
+    .title { font-size: 28px; font-weight: 700; fill: #1a1a1a; }
+    .phase-title { font-size: 22px; font-weight: 700; fill: #1a1a1a; }
+    .phase-sub { font-size: 14px; fill: #555; font-style: italic; }
+    .lane-label { font-size: 16px; font-weight: 600; }
+    .lane-borrower { fill: #2563eb; }
+    .lane-chain { fill: #6b7280; }
+    .lane-lender { fill: #059669; }
+    .step-num { font-size: 18px; font-weight: 700; fill: #fff; }
+    .step-text { font-size: 13px; fill: #1a1a1a; }
+    .step-text-bold { font-size: 13px; font-weight: 600; fill: #1a1a1a; }
+    .small { font-size: 11px; fill: #666; }
+    .tx-label { font-size: 12px; font-weight: 700; fill: #fff; }
+    .tx-detail { font-size: 11px; fill: #1a1a1a; }
+    .arrow-label { font-size: 11px; fill: #444; }
+    .key-text { font-size: 13px; fill: #333; }
+    .note { font-size: 12px; fill: #666; font-style: italic; }
+  </style>
+
+  <!-- Defs for arrows -->
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <rect x="0" y="0" width="1400" height="80" fill="#f8fafc"/>
+  <text x="700" y="40" text-anchor="middle" class="title">VerusLending — Protocol Lifecycle</text>
+  <text x="700" y="65" text-anchor="middle" class="phase-sub">Pre-signed atomic transactions; lender pre-commits at origination; borrower repays unilaterally</text>
+
+  <!-- Lane headers -->
+  <rect x="0" y="80" width="1400" height="40" fill="#f1f5f9"/>
+  <line x1="467" y1="80" x2="467" y2="120" stroke="#cbd5e1" stroke-width="2"/>
+  <line x1="934" y1="80" x2="934" y2="120" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="233" y="105" text-anchor="middle" class="lane-label lane-borrower">BORROWER (Alice)</text>
+  <text x="700" y="105" text-anchor="middle" class="lane-label lane-chain">VERUS CHAIN / LOAN-ID</text>
+  <text x="1167" y="105" text-anchor="middle" class="lane-label lane-lender">LENDER (Bob)</text>
+
+  <!-- Vertical lane separators (full height) -->
+  <line x1="467" y1="120" x2="467" y2="1850" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4,4"/>
+  <line x1="934" y1="120" x2="934" y2="1850" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4,4"/>
+
+  <!-- ═══════════════════════════════════ -->
+  <!-- PHASE 1: ORIGINATION CEREMONY -->
+  <!-- ═══════════════════════════════════ -->
+  <rect x="0" y="140" width="1400" height="40" fill="#dbeafe"/>
+  <text x="20" y="167" class="phase-title">1. Origination Ceremony</text>
+  <text x="350" y="167" class="phase-sub">— both parties cooperate, sign three transactions, store two off-chain</text>
+
+  <!-- Step 1.1: Construct Tx-A, Tx-Repay, Tx-B -->
+  <g>
+    <circle cx="50" cy="220" r="20" fill="#2563eb"/>
+    <text x="50" y="227" text-anchor="middle" class="step-num">1</text>
+    <rect x="80" y="200" width="380" height="50" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1"/>
+    <text x="270" y="220" text-anchor="middle" class="step-text-bold">Both parties build 3 unsigned transactions</text>
+    <text x="270" y="237" text-anchor="middle" class="small">Tx-A (origination), Tx-Repay (template), Tx-B (default-claim)</text>
+  </g>
+
+  <!-- Tx-A box in chain lane -->
+  <g>
+    <rect x="510" y="200" width="380" height="120" rx="8" fill="#fff" stroke="#6b7280" stroke-width="2"/>
+    <rect x="510" y="200" width="380" height="22" rx="8" fill="#6b7280"/>
+    <text x="700" y="216" text-anchor="middle" class="tx-label">Tx-A — Atomic origination</text>
+    <text x="525" y="240" class="tx-detail">Inputs:</text>
+    <text x="540" y="256" class="tx-detail">• Borrower 0.5999 VRSC (RJ6Xejo UTXO)</text>
+    <text x="540" y="270" class="tx-detail">• Lender 0.4999 VRSC (RHze UTXO)</text>
+    <text x="525" y="288" class="tx-detail">Outputs:</text>
+    <text x="540" y="302" class="tx-detail">• 0.5 → Loan-ID i-address (collateral)</text>
+    <text x="540" y="316" class="tx-detail">• 0.3998 → borrower's R + 0.1999 → lender's R</text>
+  </g>
+
+  <!-- Step 1.2: Sign Tx-Repay with SIGHASH_SINGLE | ANYONECANPAY -->
+  <g>
+    <circle cx="50" cy="380" r="20" fill="#7c3aed"/>
+    <text x="50" y="387" text-anchor="middle" class="step-num">2</text>
+    <rect x="80" y="360" width="380" height="50" rx="6" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1"/>
+    <text x="270" y="380" text-anchor="middle" class="step-text-bold">Both parties sign Tx-Repay TEMPLATE</text>
+    <text x="270" y="397" text-anchor="middle" class="small">Input 0 with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY</text>
+  </g>
+
+  <!-- Tx-Repay box -->
+  <g>
+    <rect x="510" y="360" width="380" height="160" rx="8" fill="#fff" stroke="#7c3aed" stroke-width="2"/>
+    <rect x="510" y="360" width="380" height="22" rx="8" fill="#7c3aed"/>
+    <text x="700" y="376" text-anchor="middle" class="tx-label">Tx-Repay — Pre-signed template</text>
+    <text x="525" y="400" class="tx-detail" font-weight="600">Input 0:</text>
+    <text x="540" y="414" class="tx-detail">collateral UTXO (0.5 VRSC)</text>
+    <text x="540" y="428" class="tx-detail" fill="#7c3aed" font-weight="600">↑ signed: SINGLE | ANYONECANPAY</text>
+    <text x="525" y="446" class="tx-detail" font-weight="600">Output 0:</text>
+    <text x="540" y="460" class="tx-detail">0.35 → Bob (locked by sig — paired with Input 0)</text>
+    <text x="525" y="478" class="tx-detail" font-weight="600">Output 1:</text>
+    <text x="540" y="492" class="tx-detail">0.1499 → Alice (collateral return)</text>
+    <text x="540" y="506" class="small">↑ NOT covered by signatures — Alice can structure freely</text>
+  </g>
+
+  <!-- Arrow: Tx-Repay → Borrower (held off-chain) -->
+  <path d="M 510 440 Q 480 440 460 440" stroke="#7c3aed" stroke-width="2" fill="none" marker-end="url(#arrow-purple)"/>
+  <text x="465" y="430" text-anchor="end" class="arrow-label" fill="#7c3aed">→ held by Alice</text>
+
+  <!-- Step 1.3: Sign Tx-B with SIGHASH_ALL -->
+  <g>
+    <circle cx="50" cy="580" r="20" fill="#059669"/>
+    <text x="50" y="587" text-anchor="middle" class="step-num">3</text>
+    <rect x="80" y="560" width="380" height="50" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="1"/>
+    <text x="270" y="580" text-anchor="middle" class="step-text-bold">Both parties sign Tx-B (lender's default-claim)</text>
+    <text x="270" y="597" text-anchor="middle" class="small">SIGHASH_ALL, nLockTime = maturity + grace</text>
+  </g>
+
+  <!-- Tx-B box -->
+  <g>
+    <rect x="510" y="560" width="380" height="120" rx="8" fill="#fff" stroke="#059669" stroke-width="2"/>
+    <rect x="510" y="560" width="380" height="22" rx="8" fill="#059669"/>
+    <text x="700" y="576" text-anchor="middle" class="tx-label">Tx-B — Pre-signed default-claim</text>
+    <text x="525" y="600" class="tx-detail" font-weight="600">Input:</text>
+    <text x="540" y="614" class="tx-detail">collateral UTXO (same UTXO as Tx-Repay)</text>
+    <text x="525" y="632" class="tx-detail" font-weight="600">Output:</text>
+    <text x="540" y="646" class="tx-detail">0.3999 → Bob (entire collateral, less fee)</text>
+    <text x="525" y="664" class="tx-detail" fill="#059669" font-weight="600">nLockTime = block #(maturity + grace)</text>
+  </g>
+
+  <!-- Arrow: Tx-B → Lender (held off-chain) -->
+  <path d="M 890 620 Q 920 620 940 620" stroke="#059669" stroke-width="2" fill="none" marker-end="url(#arrow-green)"/>
+  <text x="945" y="610" class="arrow-label" fill="#059669">→ held by Bob</text>
+
+  <!-- Step 1.4: Broadcast Tx-A -->
+  <g>
+    <circle cx="50" cy="730" r="20" fill="#1e40af"/>
+    <text x="50" y="737" text-anchor="middle" class="step-num">4</text>
+    <rect x="80" y="710" width="810" height="50" rx="6" fill="#eef2ff" stroke="#1e40af" stroke-width="1"/>
+    <text x="485" y="730" text-anchor="middle" class="step-text-bold">Both parties verify the off-chain copies are stored, then sign &amp; broadcast Tx-A</text>
+    <text x="485" y="747" text-anchor="middle" class="small">If the ceremony aborts before this point, no on-chain state is created</text>
+  </g>
+
+  <!-- Phase 1 outcome arrow to Phase 2 -->
+  <line x1="700" y1="775" x2="700" y2="800" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow-gray)"/>
+
+  <!-- ═══════════════════════════════════ -->
+  <!-- PHASE 2: LOAN ACTIVE -->
+  <!-- ═══════════════════════════════════ -->
+  <rect x="0" y="820" width="1400" height="40" fill="#fef3c7"/>
+  <text x="20" y="847" class="phase-title">2. Loan Active</text>
+  <text x="270" y="847" class="phase-sub">— nothing happens on chain; both sides hold their pre-signed transactions</text>
+
+  <!-- Borrower state -->
+  <g>
+    <rect x="50" y="880" width="380" height="100" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="70" y="905" class="step-text-bold">Alice (borrower)</text>
+    <text x="70" y="925" class="step-text">• Has 0.3 VRSC principal in her wallet</text>
+    <text x="70" y="942" class="step-text">• Holds Tx-Repay template (hex)</text>
+    <text x="70" y="959" class="step-text">• Spends/uses principal during loan term</text>
+    <text x="70" y="975" class="small">She can broadcast Tx-Repay any time before maturity</text>
+  </g>
+
+  <!-- Loan-ID state -->
+  <g>
+    <rect x="510" y="880" width="380" height="100" rx="8" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.5"/>
+    <text x="530" y="905" class="step-text-bold">Loan-ID (on chain)</text>
+    <text x="530" y="925" class="step-text">• 2-of-2 [Alice, Bob] — null revoke/recover</text>
+    <text x="530" y="942" class="step-text">• Holds 0.5 VRSC collateral in i-address</text>
+    <text x="530" y="959" class="step-text">• Can only be moved via the 3 pre-signed txs</text>
+    <text x="530" y="975" class="small">Or, with cooperation, by both parties signing a new tx</text>
+  </g>
+
+  <!-- Lender state -->
+  <g>
+    <rect x="970" y="880" width="380" height="100" rx="8" fill="#d1fae5" stroke="#059669" stroke-width="1.5"/>
+    <text x="990" y="905" class="step-text-bold">Bob (lender)</text>
+    <text x="990" y="925" class="step-text">• Holds Tx-B (hex) for default-claim</text>
+    <text x="990" y="942" class="step-text">• Has nothing on chain to claim until maturity+grace</text>
+    <text x="990" y="959" class="step-text">• Can be offline, traveling, etc.</text>
+    <text x="990" y="975" class="small">No live cooperation needed during the loan term</text>
+  </g>
+
+  <!-- Branching arrow to Phase 3 -->
+  <path d="M 700 990 L 700 1010 M 700 1010 L 350 1040 M 700 1010 L 1050 1040" stroke="#1a1a1a" stroke-width="2" fill="none"/>
+  <text x="350" y="1035" text-anchor="middle" class="step-text-bold">Alice repays → 3a</text>
+  <text x="1050" y="1035" text-anchor="middle" class="step-text-bold">Alice doesn't → 3b</text>
+
+  <!-- ═══════════════════════════════════ -->
+  <!-- PHASE 3a: HAPPY PATH (REPAYMENT) -->
+  <!-- ═══════════════════════════════════ -->
+  <rect x="0" y="1060" width="700" height="40" fill="#dbeafe"/>
+  <text x="20" y="1087" class="phase-title" fill="#1e40af">3a. Happy Path — Repayment</text>
+
+  <!-- Step 3a.1 -->
+  <g>
+    <circle cx="50" cy="1140" r="20" fill="#2563eb"/>
+    <text x="50" y="1147" text-anchor="middle" class="step-num">5a</text>
+    <rect x="80" y="1120" width="370" height="50" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1"/>
+    <text x="265" y="1140" text-anchor="middle" class="step-text-bold">Alice's wallet retrieves Tx-Repay template</text>
+    <text x="265" y="1157" text-anchor="middle" class="small">She picks UTXO(s) totaling ≥ 0.35 + fee</text>
+  </g>
+
+  <!-- Step 3a.2 -->
+  <g>
+    <circle cx="50" cy="1210" r="20" fill="#2563eb"/>
+    <text x="50" y="1217" text-anchor="middle" class="step-num">6a</text>
+    <rect x="80" y="1190" width="370" height="60" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1"/>
+    <text x="265" y="1207" text-anchor="middle" class="step-text-bold">Alice signs new inputs/outputs with SIGHASH_ALL</text>
+    <text x="265" y="1223" text-anchor="middle" class="small">Output 0 (Bob's payment) untouched — locked at origination</text>
+    <text x="265" y="1239" text-anchor="middle" class="small">Lender's pre-sig remains valid — ANYONECANPAY ignores other inputs</text>
+  </g>
+
+  <!-- Step 3a.3 -->
+  <g>
+    <circle cx="50" cy="1290" r="20" fill="#2563eb"/>
+    <text x="50" y="1297" text-anchor="middle" class="step-num">7a</text>
+    <rect x="80" y="1270" width="370" height="50" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1"/>
+    <text x="265" y="1290" text-anchor="middle" class="step-text-bold">Alice broadcasts the complete Tx-Repay</text>
+    <text x="265" y="1307" text-anchor="middle" class="small">She does this unilaterally — no live coordination with Bob</text>
+  </g>
+
+  <!-- Atomic settlement on chain (happy path) -->
+  <g>
+    <rect x="80" y="1340" width="600" height="160" rx="8" fill="#fff" stroke="#1e40af" stroke-width="2"/>
+    <text x="380" y="1365" text-anchor="middle" class="step-text-bold" fill="#1e40af">⚡ Atomic settlement on chain (one transaction)</text>
+    <text x="100" y="1395" class="tx-detail" font-weight="600">Loan-ID i-address: 0.5 VRSC consumed</text>
+    <text x="100" y="1413" class="tx-detail" font-weight="600">Bob receives: +0.35 VRSC (locked Output 0)</text>
+    <text x="100" y="1431" class="tx-detail" font-weight="600">Alice receives: +0.1499 VRSC (collateral return, Output 1)</text>
+    <text x="100" y="1449" class="tx-detail" font-weight="600">Alice's funding input: −0 VRSC (collateral covers it)</text>
+    <text x="100" y="1473" class="small" fill="#1e40af">Tx-B becomes invalid — its input UTXO is consumed.</text>
+    <text x="100" y="1488" class="small" fill="#1e40af">Bob never had to be online or sign anything at repayment time.</text>
+  </g>
+
+  <!-- ═══════════════════════════════════ -->
+  <!-- PHASE 3b: DEFAULT PATH -->
+  <!-- ═══════════════════════════════════ -->
+  <rect x="700" y="1060" width="700" height="40" fill="#d1fae5"/>
+  <text x="720" y="1087" class="phase-title" fill="#059669">3b. Default Path — Lender Claims</text>
+
+  <!-- Step 3b.1 -->
+  <g>
+    <circle cx="730" cy="1140" r="20" fill="#059669"/>
+    <text x="730" y="1147" text-anchor="middle" class="step-num">5b</text>
+    <rect x="760" y="1120" width="600" height="50" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="1"/>
+    <text x="1060" y="1140" text-anchor="middle" class="step-text-bold">Loan term ends — Alice never broadcast Tx-Repay</text>
+    <text x="1060" y="1157" text-anchor="middle" class="small">Either she chose not to repay, or lost keys, or died</text>
+  </g>
+
+  <!-- Step 3b.2 -->
+  <g>
+    <circle cx="730" cy="1210" r="20" fill="#059669"/>
+    <text x="730" y="1217" text-anchor="middle" class="step-num">6b</text>
+    <rect x="760" y="1190" width="600" height="50" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="1"/>
+    <text x="1060" y="1210" text-anchor="middle" class="step-text-bold">Chain reaches block ≥ Tx-B's nLockTime</text>
+    <text x="1060" y="1227" text-anchor="middle" class="small">e.g. maturity + 30 days</text>
+  </g>
+
+  <!-- Step 3b.3 -->
+  <g>
+    <circle cx="730" cy="1290" r="20" fill="#059669"/>
+    <text x="730" y="1297" text-anchor="middle" class="step-num">7b</text>
+    <rect x="760" y="1270" width="600" height="50" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="1"/>
+    <text x="1060" y="1290" text-anchor="middle" class="step-text-bold">Bob retrieves Tx-B from storage and broadcasts it</text>
+    <text x="1060" y="1307" text-anchor="middle" class="small">Already fully signed by both parties from origination day</text>
+  </g>
+
+  <!-- Atomic settlement (default) -->
+  <g>
+    <rect x="730" y="1340" width="630" height="160" rx="8" fill="#fff" stroke="#059669" stroke-width="2"/>
+    <text x="1045" y="1365" text-anchor="middle" class="step-text-bold" fill="#059669">⚡ Atomic settlement on chain (one transaction)</text>
+    <text x="755" y="1395" class="tx-detail" font-weight="600">Loan-ID i-address: 0.5 VRSC consumed</text>
+    <text x="755" y="1413" class="tx-detail" font-weight="600">Bob receives: +0.3999 VRSC (entire collateral, less fee)</text>
+    <text x="755" y="1431" class="tx-detail" font-weight="600">Alice receives: nothing — she defaulted</text>
+    <text x="755" y="1455" class="small" fill="#059669">Tx-Repay becomes invalid — its input UTXO is consumed.</text>
+    <text x="755" y="1470" class="small" fill="#059669">Alice never had to be online — Bob acted unilaterally.</text>
+    <text x="755" y="1485" class="small" fill="#059669">She kept the 0.3 principal she borrowed; lost 0.5 collateral.</text>
+  </g>
+
+  <!-- ═══════════════════════════════════ -->
+  <!-- KEY PROPERTIES (footer) -->
+  <!-- ═══════════════════════════════════ -->
+  <rect x="0" y="1540" width="1400" height="40" fill="#fef3c7"/>
+  <text x="20" y="1567" class="phase-title">Key Properties</text>
+
+  <g>
+    <rect x="50" y="1600" width="400" height="220" rx="8" fill="#fff" stroke="#7c3aed" stroke-width="1"/>
+    <text x="70" y="1625" class="step-text-bold" fill="#7c3aed">SIGHASH_SINGLE | ANYONECANPAY</text>
+    <text x="70" y="1650" class="step-text">on the collateral input means:</text>
+    <text x="70" y="1675" class="step-text">• Lender's signature covers ONLY:</text>
+    <text x="85" y="1690" class="step-text">— Input 0 itself</text>
+    <text x="85" y="1705" class="step-text">— Output 0 (lender's payment), paired by index</text>
+    <text x="70" y="1730" class="step-text">• Other inputs/outputs are FREE for borrower</text>
+    <text x="70" y="1755" class="step-text">• Same SIGHASH the marketplace uses internally</text>
+    <text x="70" y="1780" class="step-text">• Locks the lender's pre-commitment irrevocably</text>
+    <text x="70" y="1805" class="step-text">• Borrower can settle without lender online</text>
+  </g>
+
+  <g>
+    <rect x="490" y="1600" width="400" height="220" rx="8" fill="#fff" stroke="#1e40af" stroke-width="1"/>
+    <text x="510" y="1625" class="step-text-bold" fill="#1e40af">Why no front-run is possible</text>
+    <text x="510" y="1650" class="step-text">The pre-signed Tx-Repay is private:</text>
+    <text x="510" y="1675" class="step-text">• Held in Alice's wallet, never on chain</text>
+    <text x="510" y="1690" class="step-text">• No public offer in mempool to race</text>
+    <text x="510" y="1705" class="step-text">• When Alice broadcasts, the tx is complete</text>
+    <text x="510" y="1730" class="step-text">Output 0 is signed-locked to Bob's address:</text>
+    <text x="510" y="1745" class="step-text">• Strangers can't redirect the payment</text>
+    <text x="510" y="1760" class="step-text">• Locked amount = exactly principal + interest</text>
+    <text x="510" y="1785" class="step-text">No malicious revoke is possible:</text>
+    <text x="510" y="1800" class="step-text">• Loan-ID has null revocation/recovery authority</text>
+  </g>
+
+  <g>
+    <rect x="930" y="1600" width="430" height="220" rx="8" fill="#fff" stroke="#059669" stroke-width="1"/>
+    <text x="950" y="1625" class="step-text-bold" fill="#059669">What this protocol cannot do</text>
+    <text x="950" y="1650" class="step-text">• Force borrower to repay (default is her right)</text>
+    <text x="950" y="1675" class="step-text">• Resolve subjective disputes — those go to courts</text>
+    <text x="950" y="1700" class="step-text">• Recover from BOTH parties losing keys</text>
+    <text x="950" y="1725" class="step-text">• Variable-rate loans (Tx-Repay outputs are fixed)</text>
+    <text x="950" y="1755" class="step-text-bold">What it provides</text>
+    <text x="950" y="1775" class="step-text">• Atomic origination &amp; settlement</text>
+    <text x="950" y="1790" class="step-text">• Cryptographic enforcement, no third-party trust</text>
+    <text x="950" y="1805" class="step-text">• Survives single-party key loss</text>
+  </g>
+
+  <!-- Bottom watermark -->
+  <text x="700" y="1880" text-anchor="middle" class="small">VerusLending v0.4 — github.com/Fried333/veruslending — empirically validated on Verus mainnet</text>
+</svg>

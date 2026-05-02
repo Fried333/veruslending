@@ -14,6 +14,7 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 
 - **[SPEC.md](./SPEC.md)** — formal protocol specification (validated)
 - **[TESTING.md](./TESTING.md)** — empirical test results from Verus mainnet, with txid references
+- **[diagram.svg](./diagram.svg)** — step-by-step protocol lifecycle diagram
 - **[LICENSE](./LICENSE)** — MIT
 
 ## Status

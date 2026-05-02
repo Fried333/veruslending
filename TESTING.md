@@ -212,6 +212,51 @@ Complete loan lifecycle from origination through repayment, using only the canon
 
 This is the canonical demonstration of the v0.4 protocol design.
 
+### 17. Full default-path E2E lifecycle
+
+Companion to test §16. Demonstrates the complete loan lifecycle when the borrower DOES NOT repay — the default path where lender broadcasts pre-signed Tx-B at maturity + grace.
+
+**Setup (Phase 1):**
+- VLotto 102 converted to 2-of-2 [RJ6Xejo, RHze], revoke=recover=self
+- Conversion tx: `cf6c63945335898009f9d9199d2662aedad356393af5778329603a0b544d187d`
+
+**Origination (Phase 2 — Tx-A):**
+- Tx: `944cf8331c318af6b96ca42956e01863b6309773c9a1f28749eb56ad7eff5568`
+- Inputs: borrower 0.4487 VRSC + lender 0.55 VRSC
+- Outputs: 0.4 → VLotto 102 i-address (collateral); 0.2986 → RJ6Xejo; 0.3 → RHze
+
+**Pre-sign Tx-B (Phase 3 — at origination):**
+- Input 0: collateral UTXO (0.4 VRSC)
+- Output 0: 0.3999 → RHze (lender claims, less fee)
+- nLockTime = block 4049384 (current+10 at sign time)
+- Both 2-of-2 signers sign with SIGHASH_ALL
+- Resulting hex held by lender
+
+**Pre-locktime sanity check:**
+- Attempted broadcast at block 4049374 → rejected with `error 64: non-final` ✅
+- Confirms nLockTime enforcement on cryptocondition input
+
+**Default trigger (Phase 4):**
+- Borrower never broadcast Tx-Repay (simulated default)
+- Block 4049384 reached → Tx-B's nLockTime satisfied
+- Lender broadcast saved Tx-B hex
+- Tx: `70eb365d6969912bfa2d221ea52a58673cc484970d0eb5d85c11cb071236fa20`
+- Confirmed in chain
+
+**Verification (Phase 5):**
+- Loan-ID i-address: 0 VRSC (collateral consumed by default-claim)
+- RHze (lender): received +0.3999 VRSC (entire collateral, less fee)
+- Borrower (RJ6Xejo): received nothing — defaulted; kept their 0.3 principal from origination
+
+**Validates:**
+- ✅ Pre-signed Tx-B with future nLockTime, held off-chain by lender
+- ✅ Pre-locktime broadcast rejected at consensus
+- ✅ Post-locktime unilateral broadcast by lender — no borrower cooperation
+- ✅ Atomic settlement: collateral → lender in single transaction
+- ✅ Borrower's loss = collateral; gain = principal kept (cleanly defaulted)
+
+Together with test §16, this demonstrates both canonical settlement paths (repay or default) work end-to-end with no third-party involvement.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations
