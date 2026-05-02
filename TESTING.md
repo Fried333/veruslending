@@ -166,6 +166,52 @@ Some VLotto sub-IDs were mutated during testing and remain in non-original state
 
 These are test artifacts; not consequential to the protocol design.
 
+### 16. Full canonical end-to-end lifecycle
+
+Complete loan lifecycle from origination through repayment, using only the canonical SIGHASH_SINGLE|ANYONECANPAY pattern, no panic button.
+
+**Setup (Phase 1):**
+- VLotto 101 converted to 2-of-2 [RJ6Xejo, RHze], revoke=recover=self (effectively null)
+- Conversion tx: `082ca1a302eef507114bf123f9803bc6262b598fd9dccd82d666a4710a162f9d`
+
+**Origination (Phase 2 — Tx-A):**
+- Tx: `53c020389a48cf13d22ff2efd0891e9389287745502b487c800999937d4b913d`
+- Inputs: borrower 0.5999 VRSC (RJ6Xejo) + lender 0.4999 VRSC (RHze on .44)
+- Outputs: 0.5 VRSC → VLotto 101 i-address (collateral); 0.3998 → RJ6Xejo (borrower change + 0.3 principal); 0.1999 → RHze (lender change)
+- Multi-party signed via raw tx workflow; broadcast and confirmed
+- Loan terms: principal 0.3, interest 0.05, repayment 0.35
+
+**Pre-sign Tx-Repay template (Phase 3 — at origination):**
+- Input 0: collateral UTXO at i7b7Tq8JYXX9iqS7FBevC6LaG3ioh8z3RM
+- Output 0: 0.35 VRSC → RHze (paired with Input 0 by index)
+- Output 1: 0.1499 VRSC → RJ6Xejo (borrower's collateral return)
+- Both 2-of-2 signers sign Input 0 with `SINGLE|ANYONECANPAY`
+- `signrawtransaction` reports `complete: True, errors: 0`
+- Resulting hex held by borrower (in real flow); for this test, executed immediately
+
+**Repayment (Phase 4 — Tx-Repay):**
+- Tx: `286ba62f68239b59e713b91fb9a92509e01366975cb8c48fd1e5f858f1b95d55`
+- Borrower broadcasts the complete pre-signed Tx-Repay
+- Lender's signature made at origination is sufficient; lender does not sign anything at repayment time
+- Confirmed in chain (5+ confirmations as of test capture)
+
+**Verification (Phase 5 — final state):**
+- Loan-ID i-address: 0 VRSC (collateral consumed)
+- RHze (lender): received +0.35 VRSC (matches signed-locked Output 0)
+- RJ6Xejo (borrower): received +0.1499 VRSC (collateral return via Output 1)
+- VLotto 101 still 2-of-2 active but dormant (no funds; loan complete)
+
+**Validates:**
+- ✅ Canonical Tx-Repay flow with SIGHASH_SINGLE|ANYONECANPAY
+- ✅ Lender's pre-commitment at origination is final (cannot retract or refuse)
+- ✅ Borrower's unilateral broadcast capability (no live cooperation needed)
+- ✅ Atomic settlement in single transaction
+- ✅ Full lifecycle works end-to-end with no panic button, no recovery authority, no third party
+- ✅ Output 0 (lender's payment) locked exactly to specified amount
+- ✅ Output 1 (borrower's collateral return) NOT covered by lender's signature; borrower can structure freely
+
+This is the canonical demonstration of the v0.4 protocol design.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations
