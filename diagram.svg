@@ -126,7 +126,7 @@
     <text x="525" y="600" class="tx-detail" font-weight="600">Input:</text>
     <text x="540" y="614" class="tx-detail">collateral UTXO (same UTXO as Tx-Repay)</text>
     <text x="525" y="632" class="tx-detail" font-weight="600">Output:</text>
-    <text x="540" y="646" class="tx-detail">0.3999 → Bob (entire collateral, less fee)</text>
+    <text x="540" y="646" class="tx-detail">0.4999 → Bob (entire collateral, less fee)</text>
     <text x="525" y="664" class="tx-detail" fill="#059669" font-weight="600">nLockTime = block #(maturity + grace)</text>
   </g>
 
@@ -272,7 +272,7 @@
     <rect x="730" y="1340" width="630" height="160" rx="8" fill="#fff" stroke="#059669" stroke-width="2"/>
     <text x="1045" y="1365" text-anchor="middle" class="step-text-bold" fill="#059669">⚡ Atomic settlement on chain (one transaction)</text>
     <text x="755" y="1395" class="tx-detail" font-weight="600">Loan-ID i-address: 0.5 VRSC consumed</text>
-    <text x="755" y="1413" class="tx-detail" font-weight="600">Bob receives: +0.3999 VRSC (entire collateral, less fee)</text>
+    <text x="755" y="1413" class="tx-detail" font-weight="600">Bob receives: +0.4999 VRSC (entire collateral, less fee)</text>
     <text x="755" y="1431" class="tx-detail" font-weight="600">Alice receives: nothing — she defaulted</text>
     <text x="755" y="1455" class="small" fill="#059669">Tx-Repay becomes invalid — its input UTXO is consumed.</text>
     <text x="755" y="1470" class="small" fill="#059669">Alice never had to be online — Bob acted unilaterally.</text>
