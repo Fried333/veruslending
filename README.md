@@ -8,12 +8,12 @@ Two private parties enter a binding loan agreement on chain, with cryptographic 
 
 ## In one paragraph
 
-VerusLending is a credit primitive built from existing Verus features: 2-of-2 multisig identities, atomic offer/take swaps, and time-locked pre-signed transactions. At origination, both parties cooperatively create a Loan-ID holding the borrower's collateral, plus two pre-signed escape transactions held off-chain — one for the lender's default-claim at maturity+grace, one for the borrower's rescue if the lender disappears (maturity + 1 year). Repayment happens via an atomic 2-of-2 cosigned takeoffer. If the lender refuses valid repayment, the borrower has a unilateral revocation power (the panic button) that invalidates the lender's default-claim, creating mutual deadlock that forces honest negotiation. Subjective disputes go to real-world courts with the chain record as admissible evidence.
+VerusLending is a credit primitive built from existing Verus features: 2-of-2 multisig identities, atomic raw transactions, and pre-signed time-locked transactions using SIGHASH_ANYONECANPAY. At origination, both parties cooperatively create a Loan-ID holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one for the borrower's last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Lender stonewalling is structurally impossible. Subjective disputes go to real-world courts with the chain record as admissible evidence.
 
 ## What's here
 
 - **[SPEC.md](./SPEC.md)** — formal protocol specification (validated)
-- **[TESTING.md](./TESTING.md)** — empirical test results from Verus mainnet
+- **[TESTING.md](./TESTING.md)** — empirical test results from Verus mainnet, with txid references
 - **[LICENSE](./LICENSE)** — MIT
 
 ## Status
@@ -22,19 +22,19 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 
 | Mechanism | Status |
 |---|---|
-| Loan-ID structure (2-of-2 multisig + revoke + recover) | ✅ validated |
+| Loan-ID structure (2-of-2 multisig) | ✅ validated |
 | Atomic origination (raw multi-party tx) | ✅ validated |
-| Repayment (makeoffer/takeoffer with 2-of-2 cosign) | ✅ validated |
+| **Pre-signed Tx-Repay (SIGHASH_ANYONECANPAY)** — canonical | ✅ validated |
 | Default claim (Tx-B with nLockTime) | ✅ validated |
 | Borrower's rescue (Tx-C structurally identical to Tx-B) | ✅ validated by extension |
-| Panic button (revoke invalidates pre-signed Tx-B) | ✅ validated |
-| Front-run protection (stranger cannot deliver Loan-ID) | ✅ validated |
+| Optional panic button (revoke invalidates Tx-B) | ✅ validated |
+| Front-run protection (no offer ever in mempool) | ✅ structural |
 
-See [TESTING.md](./TESTING.md) for txid references on Verus mainnet.
+See [TESTING.md](./TESTING.md) for txid references.
 
 ## Why it matters
 
-This is what private secured lending looked like before banks: two parties, a notarized agreement, time-based defaults. Existing crypto lending products that work today (Ledn, Unchained, Arch) re-create that model with corporate operators. VerusLending re-creates it with cryptographic enforcement instead — the chain is the notary, the parties are themselves.
+This is what private secured lending looked like before banks: two parties, a notarized agreement, time-based defaults. Existing crypto lending products that work today (Ledn, Unchained, Arch) re-create that model with corporate operators. VerusLending re-creates it with cryptographic enforcement instead — the chain is the notary, the parties are themselves, and the lender's commitment is enforced by signature mechanics rather than by external accountability.
 
 The protocol is intentionally minimal:
 
@@ -56,34 +56,52 @@ The protocol is intentionally minimal:
 - Lending to anonymous strangers without external trust mechanisms
 - High-frequency margin trading
 - Public lending platforms with retail users (regulatory complications)
+- Variable-rate or amortizing loans (Tx-Repay outputs are fixed at origination)
 
 ## Architecture summary
 
 ```
-Origination (one ceremony):
-  Tx-A: atomic multi-party tx — collateral → Loan-ID, principal → borrower
-  Tx-B: pre-signed lender's default-claim (nLockTime = maturity + grace)
-  Tx-C: pre-signed borrower's rescue (nLockTime = maturity + 1 year)
+Origination ceremony (one-time, cooperative):
+  Tx-A:       atomic origination — collateral → Loan-ID, principal → borrower
+  Tx-Repay:   pre-signed atomic repayment template (SIGHASH_ANYONECANPAY)
+              Held privately by borrower
+              Borrower can broadcast unilaterally any time before maturity
+  Tx-B:       pre-signed lender's default-claim (nLockTime = maturity + grace)
+              Held by lender; broadcast at maturity if no Tx-Repay broadcast
+  Tx-C:       pre-signed borrower's last-resort rescue (nLockTime = maturity + 1 year)
+              Held by borrower; rare fallback
 
 Loan-ID:
   primary: 2-of-2 [borrower, lender]
-  revocation: borrower (panic button)
+  revocation: borrower (optional safety net)
   recovery: 2-of-2 [borrower, lender]
 
-Repayment:
-  borrower's makeoffer + lender's 2-of-2 cosigned takeoffer = atomic settlement
+Repayment (canonical):
+  Borrower's wallet appends funding inputs to Tx-Repay template
+  Borrower signs the new inputs with SIGHASH_ALL
+  Borrower broadcasts → atomic settlement
+  Lender does not need to sign anything at repayment time
 
 Default:
-  lender broadcasts Tx-B at maturity + grace
+  Borrower never broadcasts Tx-Repay
+  Lender broadcasts Tx-B at maturity + grace
 
 Lender disappeared:
-  borrower broadcasts Tx-C at maturity + 1 year
-
-Lender refuses valid repayment:
-  borrower revokes Loan-ID → Tx-B invalidated → mutual freeze → forced negotiation
+  Borrower broadcasts Tx-Repay normally — pre-signature is sufficient
+  No reliance on lender being alive or available
 ```
 
 See [SPEC.md](./SPEC.md) for the full protocol.
+
+## Relationship to other Verus lending efforts
+
+This protocol is a **peer-to-peer fixed-term primitive**. It's complementary to other lending models the Verus ecosystem may support:
+
+- **Basket-based pool lending** (a future Verus direction): currency baskets become lending pools with dynamic interest rates based on collateral/loan ratios; LPs earn fees by holding basket tokens; margin call enforcement via import rollup or validator-incentivized redemption. Best fit for retail / anonymous / market-rate lending. This is a different model than VerusLending — they serve different use cases.
+
+- **Template outputs** (a future Verus feature): non-spending outputs that act as cross-tx constraints requiring a matching companion output with specified fields. When this lands, it would simplify some of the patterns we currently express via SIGHASH manipulation, and could enable cleaner Loan-ID-makes-offer designs that solve the empty-Pay-ID problem we encountered during testing.
+
+VerusLending serves the use case where two known parties want to enter a private, fixed-term, fixed-rate loan with cryptographic atomic settlement. Mike's basket-based lending vision would serve the use case where anyone wants to borrow at market rates from a pooled liquidity source. Both should exist.
 
 ## Contributing
 
@@ -91,4 +109,4 @@ This is a working draft. Spec contributions, implementation work, and security r
 
 ## Acknowledgments
 
-Built on Verus's identity, currency, and offer/swap primitives. The design borrows ideas from Bisq's atomic-swap escrow patterns and Bitcoin's nLockTime semantics.
+Built on Verus's identity, currency, raw-transaction, and SIGHASH primitives. Design borrows ideas from Bitcoin's nLockTime semantics, Lightning Network's pre-signed transaction patterns (HTLCs), and Bisq's atomic-swap escrow patterns.

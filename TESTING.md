@@ -20,7 +20,7 @@ Identity converted from single-sig to 2-of-2 [RHze, RJ6Xejo]. Subsequent updatei
 - **Method**: `createrawtransaction` → local partial sign → ship to .44 → cosign → broadcast
 - Confirmed in single block; collateral and principal moved atomically.
 
-### 3. Repayment via takeoffer 2-of-2 cosign
+### 3. Repayment via takeoffer 2-of-2 cosign (alternative pattern)
 - **Tx**: `a47bb608e06275f753af0cad779bb4bdb8960ae6bfe35f25a237e6fdbd153833`
 - Borrower (RJ6Xejo) posted `makeoffer` (0.55 VRSC for VLotto 108 transferred to borrower)
 - Lender (.44) constructed partial takeoffer with returntx=true → 1692 bytes, complete=False
@@ -64,8 +64,7 @@ This is a protocol-level safeguard against trivial revoke-then-self-recover seiz
 - At block 4049183: same hex accepted, confirmed
 - Validates the pre-signed default-claim mechanism.
 
-### 10. Borrower's revoke invalidates pre-signed Tx-B
-This is the panic button validation:
+### 10. Borrower's revoke invalidates pre-signed Tx-B (panic button)
 - VLotto 108 configured with revocation = steve.bitcoins@ (borrower-controlled), recovery = steve.bitcoins@ (non-self)
 - Tx-B pre-signed (2-of-2 cosigned) with future nLockTime
 - nLockTime reached, Tx-B is broadcast-eligible
@@ -77,7 +76,7 @@ This is the panic button validation:
                   (Script evaluated without error but finished with a false/empty top stack element)
   ```
 - The pre-signed signatures, valid at sign-time, are no longer accepted by consensus while the identity is revoked.
-- This is the load-bearing mechanism that gives the panic button real teeth.
+- Validates the panic button as a real deterrent (used as optional safety net in canonical design).
 
 ### 11. For-clause identity-definition does NOT enforce contents
 Test of the "Pay-ID" pattern:
@@ -89,7 +88,7 @@ Test of the "Pay-ID" pattern:
 - Takeoffer constructed delivering empty VLotto 107, accepting VLotto 103 → broadcast accepted
 - Result: VLotto 103 transferred to taker (with collateral inside); VLotto 107 transferred to RHze (still empty)
 - The "lender" (RHze) received an empty Pay-ID; the "borrower" (taker) walked away with the collateral
-- **Verus does NOT enforce contents in identity-definition for-clauses.** This rules out the naive Pay-ID pattern.
+- **Verus does NOT enforce contents in identity-definition for-clauses.** Rules out the naive Pay-ID pattern.
 
 ### 12. For-clause cannot combine identity + currency
 Tested adding currency/amount/address fields to an identity-definition for-clause. Verus accepts the JSON syntax without error, but the resulting hex is byte-identical to the same offer without those fields. Extra fields are silently ignored.
@@ -100,7 +99,7 @@ error code: -8
 error message: Both "offer" and "for" must be valid objects in the first parameter object
 ```
 
-### 13. Stranger CAN take currency-for-ID offer
+### 13. Stranger CAN take currency-for-ID offer (front-run risk)
 Conclusive test of the front-run vulnerability for currency-for-ID offers:
 - **Tx**: `d53c8d451dd94da25b8d278e332ea5a20190fa08dc45dbcb55e94b12fcff98c3`
 - Local (RUd7) created offer: offer=VLotto 104, for=0.5 VRSC paid to RJ6Xejo
@@ -110,27 +109,44 @@ Conclusive test of the front-run vulnerability for currency-for-ID offers:
 - Takeoffer broadcast successfully from .44; resulting hex accepted by network
 - Result: VLotto 104 owned by RHze; 0.5 VRSC paid to RJ6Xejo
 - **A stranger without the offerer's signing keys took an offer that the offerer made.** The cryptocondition pre-authorizes consumption; takers don't need offerer's runtime signature.
+- Empirically rules out Loan-ID-makes-offer-for-currency at origination as a viable pattern.
 
-This empirically rules out Loan-ID-makes-offer-for-currency at origination as a viable pattern: any stranger with the asking currency can front-run the borrower.
+### 14. SIGHASH_ALL | SIGHASH_ANYONECANPAY accepted on 2-of-2 i-address spend (canonical Tx-Repay)
+- **Tx**: `792b12d25cf5dab5a101ea5162623564f2b792cb872e8f4e09610b28f345e6a4`
+- Inputs: borrower's RJ6Xejo UTXO (0.9998 VRSC) + 2-of-2 cosigned i-address UTXO (0.5 VRSC)
+- Both 2-of-2 sigs on the i-address input use `ALL|ANYONECANPAY` sighash
+- Borrower's input also signed with `ALL|ANYONECANPAY`
+- `signrawtransaction` reports `complete: True, errors: 0`
+- Broadcast accepted; tx confirmed
+- Outputs: 0.6 VRSC → lender; 0.8997 VRSC → borrower (combined collateral + change)
+- Validates the **canonical pre-signed Tx-Repay mechanism** described in §3 of SPEC.md
+- Borrower achieves atomic repayment without lender's runtime cooperation; lender's pre-commit at origination is binding
 
 ## Summary of design implications
 
 | Pattern tried | Empirical result | Used? |
 |---|---|---|
-| Borrower-makes-offer at repayment | Front-run safe; lender stonewall possible | ✅ canonical |
+| Borrower-makes-offer at repayment | Front-run safe; lender stonewall possible | ✅ alternative pattern (legacy / fallback) |
 | Loan-ID-makes-offer (currency-for-ID) at origination | Front-run vulnerable | ❌ rejected |
 | Loan-ID-makes-offer (Pay-ID swap) at origination | Empty Pay-ID delivery accepted | ❌ rejected |
 | Pre-signed Tx-B with nLockTime | Works | ✅ default-claim mechanism |
-| Pre-signed Tx-C with nLockTime (same shape as Tx-B) | Works (by extension) | ✅ rescue mechanism |
-| Borrower's revoke invalidates pre-signed Tx-B | Works | ✅ panic button |
+| Pre-signed Tx-C with nLockTime (same shape as Tx-B) | Works (by extension) | ✅ rescue mechanism (optional) |
+| Borrower's revoke invalidates pre-signed Tx-B | Works | ✅ panic button (optional safety net) |
 | Verus refuses self-recovery revokes | True (protocol-level) | n/a — informs design |
+| **Pre-signed Tx-Repay with SIGHASH_ANYONECANPAY** | **Works** | ✅ **canonical repayment mechanism** |
 
 ## State on chain after tests
 
 Some VLotto sub-IDs were mutated during testing and remain in non-original states:
-- VLotto 108: revoked, recovery=steve.bitcoins@ (recoverable to clean state)
-- VLotto 103: owned by RJ6Xejo (local), 0.5 VRSC inside
+- VLotto 103: 2-of-2 [RJ6Xejo, RHze], 0 VRSC inside (collateral consumed by Tx-Repay test)
 - VLotto 104: owned by RHze (.44), empty
 - VLotto 107: owned by RHze (.44), empty
+- VLotto 108: revoked, recovery=steve.bitcoins@ (recoverable to clean state)
 
 These are test artifacts; not consequential to the protocol design.
+
+## What remains untested (conservative assumptions)
+
+- Whether `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` (rather than `ALL|ANYONECANPAY`) provides the same atomic settlement guarantees with greater output flexibility — assumed yes per Bitcoin SIGHASH semantics, untested on Verus specifically
+- Behavior of pre-signed transactions across chain reorganizations
+- Behavior when input 0 (borrower's funding input) is added at repayment time vs included as a placeholder at origination — assumed equivalent per ANYONECANPAY semantics

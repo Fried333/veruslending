@@ -1,10 +1,10 @@
 # VerusLending — Protocol Specification
 
-**Status:** Draft v0.1 — empirically validated on Verus mainnet
+**Status:** Draft v0.2 — empirically validated on Verus mainnet
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
-A peer-to-peer collateralized credit protocol built from existing VerusID and atomic-swap primitives. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all happy-path and most failure-mode outcomes. No arbiter. No committee. No third-party intermediary. No discretionary recovery authority.
+A peer-to-peer collateralized credit protocol built from existing VerusID and pre-signed transaction primitives. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all happy-path and most failure-mode outcomes. No arbiter. No committee. No third-party intermediary. No discretionary recovery authority. The lender pre-commits to accepting repayment at origination and cannot retract; the borrower can settle unilaterally at any time during the loan term.
 
 ---
 
@@ -14,8 +14,9 @@ A peer-to-peer collateralized credit protocol built from existing VerusID and at
 
 - Two-party atomic origination
 - Atomic repayment with cryptographic settlement guarantee
+- Lender pre-commitment at origination (cannot stonewall at repayment)
+- Borrower's unilateral repayment power (no live cooperation needed at settlement)
 - Time-based default with no live cooperation required
-- Borrower-side defense against lender stonewalling (over-collateral arbitrage)
 - Survives single-party key loss (rescue path)
 - Works with existing Verus primitives — no new RPCs or consensus rules
 
@@ -27,6 +28,7 @@ A peer-to-peer collateralized credit protocol built from existing VerusID and at
 - Cross-chain BTC collateral (separate workstream — Verus Swap atomic swaps)
 - Multi-party / syndicated loans
 - Loan secondary market (transferable loan positions)
+- Variable-rate / floating-interest loans (requires re-cooperation to update terms)
 
 ---
 
@@ -48,36 +50,23 @@ Each loan has exactly one `Loan-ID` — a Verus sub-ID with these properties:
 ```
 Loan-ID
   primary:           [borrower_R, lender_R]   M = 2 (2-of-2 multisig)
-  revocationauthority: borrower-personal.@    (panic button — UNILATERAL)
-  recoveryauthority:   2-of-2-helper.@        (mutual unfreeze, requires both)
+  revocationauthority: borrower-personal.@    (optional safety net — see §6.4)
+  recoveryauthority:   2-of-2-helper.@        (mutual unfreeze)
   contentmultimap:   loan terms object        (principal, rate, maturity, parties)
-  timelock:          0                        (timelock is at the tx level, not ID level)
+  timelock:          0
 ```
 
 ### Authority semantics
 
-- **Primary (2-of-2)**: Both parties must cosign any normal action (repayment via takeoffer, multimap update, etc.). Neither can spend or update unilaterally.
-- **Revocation (borrower-controlled)**: The borrower can unilaterally revoke the Loan-ID at any time. This invalidates pre-signed transactions against the i-address (see §6).
-- **Recovery (2-of-2)**: After revocation, both parties must cooperate to assign a new primary. Neither can recover alone. This creates mutual deadlock if revocation is invoked dishonestly.
-
-### Why borrower controls revocation
-
-The borrower's revocation power is the deterrent against **lender stonewalling** (refusing to accept valid repayment in order to claim over-collateralized assets via Tx-B). With this mechanism:
-
-| Lender's action | Outcome |
-|---|---|
-| Accept valid repayment | Receives principal + interest |
-| Refuse repayment, wait for Tx-B | Borrower revokes pre-broadcast → Tx-B invalidated → mutual freeze → lender gets nothing |
-
-Lender's only winning strategy becomes "accept valid repayment." Cheating loses.
-
-The symmetric concern (borrower revokes maliciously to escape default) is addressed by economic disincentive: the borrower's collateral is also frozen post-revoke. Borrower's outcome from malicious revoke equals or exceeds the loss from honest default. Revocation is not a profitable attack.
+- **Primary (2-of-2)**: Both parties must cosign any normal `updateidentity` action. Neither can spend or update unilaterally.
+- **Revocation (borrower-controlled)**: Optional safety net. The borrower can unilaterally revoke the Loan-ID, invalidating any pre-signed transactions against the i-address. Useful as a last-resort defense; not load-bearing for the canonical design (see §6.4).
+- **Recovery (2-of-2)**: After revocation, both parties must cooperate to assign a new primary. Mutual deadlock if revocation is invoked dishonestly.
 
 ---
 
 ## 3. Pre-signed transactions
 
-Three transactions are constructed and signed at origination. Two are held off-chain, one is broadcast.
+Three transactions are constructed and signed at origination. One is broadcast immediately; two are held off-chain.
 
 ### Tx-A: Origination (broadcast at origination)
 
@@ -96,183 +85,194 @@ Outputs:
 
 Both parties sign their respective inputs via standard `signrawtransaction`. The Loan-ID is registered in the same tx (or a coordinated companion tx; see §4 for ceremony details).
 
+### Tx-Repay: Pre-signed repayment template (held off-chain by borrower)
+
+The canonical repayment mechanism. Pre-signed at origination by both parties using `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` on the collateral input.
+
+```
+At origination — template construction:
+  Inputs:
+    [collateral input only]
+      - References Loan-ID's collateral UTXO (created by Tx-A)
+      - Both parties sign with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
+  
+  Outputs:
+    Output 0: [borrower fills in at repayment — collateral + change]
+    Output 1: principal + interest → lender's R-address
+              (signed-locked — lender's signature covers exactly this output)
+  
+  expiryheight: maturity_block (so it cannot be broadcast after default deadline)
+```
+
+**Signature semantics:**
+
+`SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` on the collateral input means:
+- Lender's signature covers ONLY the collateral input itself + Output 1 (lender's payment)
+- It does NOT cover other inputs (Alice's funding, added at repayment)
+- It does NOT cover Output 0 (borrower's collateral return — borrower can structure freely)
+
+This means at repayment, Alice can:
+- Add any number of inputs from her wallet (any UTXOs she happens to have)
+- Construct Output 0 to receive the collateral plus any change
+- Sign her additions with standard SIGHASH_ALL
+
+The lender's pre-commitment is bounded to "I'll release the collateral if exactly principal+interest arrives at my address." Everything else is the borrower's prerogative.
+
 ### Tx-B: Lender's default-claim (held off-chain by lender)
 
+Fallback if borrower doesn't repay before maturity.
+
 ```
-Input:  Loan-ID i-address collateral UTXO (created by Tx-A)
+Input:  Loan-ID i-address collateral UTXO (same UTXO as Tx-Repay references)
 Output: collateral → lender's R-address (less fee)
 nLockTime: maturity_block + grace_period (e.g., +30 days)
-Signatures: 2-of-2 [borrower, lender], signed at origination
+Signatures: 2-of-2 [borrower, lender], SIGHASH_ALL, signed at origination
 ```
 
-Held off-chain by the lender. Cannot be broadcast before `nLockTime`. After locktime, lender can broadcast unilaterally — already fully signed by both parties at origination. Borrower's revocation invalidates this pre-signed tx.
+Lender broadcasts Tx-B at maturity + grace if the borrower hasn't broadcast Tx-Repay. Cannot be broadcast before nLockTime.
 
-### Tx-C: Borrower's rescue (held off-chain by borrower)
+### Tx-C: Borrower's last-resort rescue (optional — held off-chain by borrower)
+
+Mostly redundant given Tx-Repay (which the borrower can already broadcast unilaterally). Exists as a fallback for the case where the parties later renegotiate Tx-Repay's terms but Tx-Repay's expiry passes before settlement.
 
 ```
 Input:  Same Loan-ID i-address collateral UTXO
 Output: collateral → borrower's R-address (less fee)
-nLockTime: maturity_block + lockout (e.g., +1 year)
-Signatures: 2-of-2 [borrower, lender], signed at origination
+nLockTime: maturity_block + extended_lockout (e.g., +1 year)
+Signatures: 2-of-2 [borrower, lender], SIGHASH_ALL, signed at origination
 ```
-
-Held off-chain by the borrower. The two-pre-signed-txs share the same input; once one is broadcast, the other is invalidated by double-spend protection. Tx-C exists as the borrower's last-resort if the lender disappears entirely.
 
 ---
 
 ## 4. Origination ceremony
 
-The ordering of signatures is critical. **All three transactions must be fully signed before Tx-A is broadcast.**
+The signing order is critical. **All four transactions (Tx-A, Tx-Repay template, Tx-B, Tx-C) must be fully signed before Tx-A is broadcast.**
 
 ```
 Step 1: Construct unsigned Tx-A (origination)
         - Both parties propose inputs from their wallets
         - Both parties propose outputs (collateral, principal, change)
-        - Loan-ID definition prepared (2-of-2 primary, revoke=borrower, recover=2-of-2 helper)
+        - Loan-ID definition prepared (2-of-2 primary, etc.)
 
-Step 2: Construct unsigned Tx-B (lender's default-claim)
+Step 2: Construct unsigned Tx-Repay template
         - References Tx-A's collateral output (predicted txid:vout)
+        - One input (collateral); two outputs (Output 0 placeholder, Output 1 to lender)
+        - Both parties sign collateral input with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
+        - Borrower stores the partial tx hex
+
+Step 3: Construct unsigned Tx-B (lender's default-claim)
+        - References Tx-A's collateral output
         - Output to lender's R
         - nLockTime = maturity + grace
+        - Both parties sign with SIGHASH_ALL
+        - Lender stores
 
-Step 3: Construct unsigned Tx-C (borrower's rescue)
-        - References same Tx-A collateral output
+Step 4: (Optional) Construct unsigned Tx-C (borrower's last-resort rescue)
+        - References same collateral output
         - Output to borrower's R
-        - nLockTime = maturity + lockout
+        - nLockTime = maturity + extended_lockout
+        - Both parties sign with SIGHASH_ALL
+        - Borrower stores
 
-Step 4: Both parties sign Tx-B and Tx-C
-        - Each party adds their signature to both
-        - Multi-step coordinated signing via signrawtransaction with returntx=true
-        - Lender stores Tx-B; borrower stores Tx-C
-        - At this point neither tx is on chain
-
-Step 5: Both parties sign Tx-A
-        - Both parties verify Tx-B and Tx-C are stored safely on the holder's side
-        - Then sign Tx-A and broadcast
-
-Step 6: Tx-A confirms; loan is active
+Step 5: Both parties verify Tx-Repay/Tx-B/Tx-C are stored on the appropriate side
+        Then sign Tx-A and broadcast
 ```
 
-If the ceremony aborts at any step before 5, no on-chain state is created. No funds are lost.
+If the ceremony aborts before step 5, no on-chain state is created. No funds are lost.
 
 ### Predicting Tx-A's txid
 
-Verus is a Komodo-fork (legacy Bitcoin tx format). The txid depends on the full signed serialization. To compute Tx-B and Tx-C inputs before Tx-A is signed:
+Verus is a Komodo-fork (legacy Bitcoin tx format). The txid depends on the full signed serialization. To compute Tx-Repay/Tx-B/Tx-C inputs before Tx-A is signed:
 
 - Build Tx-A as fully unsigned with all input/output structure determined
-- Compute predicted txid from the unsigned form
-- Construct Tx-B/C referencing predicted_txid:vout
-- Sign Tx-B/C
-- Sign Tx-A; if its actual txid matches predicted, Tx-B/C remain valid
+- Compute predicted txid from the unsigned form (deterministic ECDSA via RFC 6979 makes this stable)
+- Construct Tx-Repay, Tx-B, Tx-C referencing predicted_txid:collateral_vout
+- Sign all of them
+- Sign Tx-A; broadcast
 
-If the actual txid differs (e.g., due to signature variation), the parties must abort and restart the ceremony with a fresh prediction. In practice, deterministic ECDSA (RFC 6979) makes this stable.
-
----
-
-## 5. Repayment flow
-
-The borrower posts a `makeoffer` at any time before maturity. The lender takes via 2-of-2 cosigned `takeoffer`. Atomic settlement.
-
-```
-Borrower's makeoffer:
-  fromaddress:   borrower's R-address (covers principal + interest payment)
-  changeaddress: borrower's R-address
-  expiryheight:  some block height before maturity
-  offer:         { currency: "VRSC", amount: principal + interest }
-  for:           {
-                   name: <Loan-ID name>,
-                   parent: <Loan-ID parent>,
-                   primaryaddresses: [borrower_R],
-                   minimumsignatures: 1
-                 }
-```
-
-The borrower offers principal+interest, asking for the Loan-ID with new primary set to themselves (single-sig, M=1).
-
-### Takeoffer (lender + borrower 2-of-2 cosign)
-
-```
-takeoffer fromaddress=lender_R
-  txid: <borrower's offer txid>
-  deliver: <Loan-ID name>     (the offered identity)
-  accept:  { address: lender_R, currency: "VRSC", amount: principal+interest }
-```
-
-Because the Loan-ID's primary is 2-of-2, the takeoffer requires both signatures to consume the offer's cryptocondition AND update the Loan-ID's identity record.
-
-Multi-step cosigning:
-1. Lender constructs `takeoffer` with returntx=true, signs with their key
-2. Lender sends partial hex to borrower
-3. Borrower signs with their key via `signrawtransaction`
-4. Either party broadcasts the fully-signed tx
-
-### Result on confirmation
-
-- Borrower's R-address: -principal-interest (paid out)
-- Lender's R-address: +principal+interest (received)
-- Loan-ID: primary changed to [borrower_R], M=1 (single-sig borrower control)
-- Collateral inside Loan-ID's i-address: now spendable by borrower
-
-The pre-signed Tx-B and Tx-C are invalidated because the collateral UTXO they reference is consumed by the takeoffer settlement.
-
-### Front-run safety
-
-Because the borrower's `for` clause specifies a particular identity (the Loan-ID), the takeoffer requires authority to deliver that identity. Only the Loan-ID's primary signers (the 2-of-2 set) have that authority. Strangers receive `error -8: This wallet has no authority to sign for any part of delivering the ID specified` and cannot construct a takeoffer.
+If actual txid differs (signature variation), abort and restart. With deterministic signing, this is rare.
 
 ---
 
-## 6. Default flow
+## 5. Repayment flow (canonical)
 
-### Normal default (borrower fails to repay)
-
-```
-Day 0:           Origination, Tx-A broadcast
-Day 0...maturity: Borrower never posts a repayment offer
-Day maturity:    Tx-B's nLockTime not yet reached
-Day maturity+grace: Tx-B's nLockTime reached
-                  Lender broadcasts Tx-B from off-chain storage
-                  Tx-B confirms; collateral lands at lender's R-address
-```
-
-The lender takes no actions during the loan term. Default-claim is unilateral via the pre-signed Tx-B at maturity+grace.
-
-If the lender forgets/loses Tx-B and never broadcasts, the borrower's Tx-C becomes valid at maturity+lockout (1 year by default) and the borrower can recover collateral instead.
-
-### Lender disappeared (rescue path)
+The borrower can repay unilaterally at any time before Tx-Repay's expiry block. **No live cooperation from the lender is needed.**
 
 ```
-Day 0:           Origination
-Borrower attempts repayment offer → lender doesn't cosign (dead, lost keys, etc.)
-Borrower closes own offer (closeoffers) → recovers attempted-payment funds
-Time passes...
-Day maturity:    Tx-B's nLockTime reached, but lender never broadcasts
-Day maturity+lockout (1 year):  Tx-C's nLockTime reached
-                  Borrower broadcasts Tx-C from off-chain storage
-                  Tx-C confirms; collateral lands at borrower's R-address
+Day N (any day during loan term, before maturity):
+  Borrower's wallet retrieves Tx-Repay template from storage
+  Wallet selects UTXO(s) totaling at least (principal + interest + fee)
+  Wallet appends those UTXOs as new inputs to the template
+  Wallet sets Output 0 to: [collateral amount + change amount] → borrower's R
+  Wallet signs the new inputs with SIGHASH_ALL
+  Wallet broadcasts the now-complete tx
 ```
 
-### Lender stonewalling (panic button activation)
+Result on confirmation:
+- Lender's R-address receives principal + interest (Output 1, signed-locked at origination)
+- Borrower's R-address receives collateral + change (Output 0, structured at repayment)
+- Loan-ID's collateral UTXO is consumed
+- Tx-B, Tx-C are now invalidated (their input is spent)
+- Lender did not sign anything at repayment time
+
+### Why the lender cannot refuse
+
+The lender's signature on the collateral input was made at origination. The signature is hex bytes in Alice's wallet. There is no mechanism by which the lender can retract or revoke that signature. Once the borrower broadcasts the complete tx, settlement is automatic.
+
+The lender can:
+- Be online or offline at repayment time — irrelevant
+- Be alive, dead, or unresponsive — irrelevant
+- Want or not want the repayment — irrelevant
+
+The mathematics has been done. The signature is final.
+
+### Why no third party can front-run
+
+The Tx-Repay template is private — held only by the borrower in their wallet, never on the public chain until they choose to broadcast. There is no offer in mempool that strangers could see and race against.
+
+When the borrower broadcasts, they submit a complete, fully-signed transaction directly to the network. It either confirms in one block or doesn't. There is no intermediate state where a stranger could intercept.
+
+The signed outputs cannot be redirected — Output 1 specifies the lender's address exactly, and the lender's signature commits to that exact output. A stranger cannot modify it.
+
+---
+
+## 6. Default and rescue flows
+
+### 6.1 Normal default (borrower fails to repay)
 
 ```
-Borrower posts valid repayment offer
-Lender refuses to cosign takeoffer (intends to claim collateral via Tx-B at maturity)
-Borrower closes own offer (recovers attempted payment)
-
-At/before maturity+grace:
-  Borrower invokes revokeidentity on Loan-ID via borrower-personal.@
-  Loan-ID transitions to "revoked" state
-  Pre-signed Tx-B becomes invalid (script-verify-flag-failed on broadcast)
-  Pre-signed Tx-C also becomes invalid
-
-Both parties stuck:
-  Recovery requires 2-of-2 [borrower, lender] cooperation
-  Neither can act unilaterally
-  Forced to negotiate or both lose
+Day 0 to maturity: Borrower never broadcasts Tx-Repay
+Day maturity + grace: Tx-B's nLockTime is reached
+Lender broadcasts Tx-B from off-chain storage
+Tx-B confirms; collateral lands at lender's R-address
+Tx-Repay and Tx-C now invalidated
 ```
 
-If they negotiate: 2-of-2 recovery transaction unfreezes the Loan-ID, parties redistribute as agreed. Off-chain renegotiation; on-chain settlement.
+### 6.2 Borrower disappears / loses keys
 
-If they don't: collateral is frozen forever. Lender lost their entire claim (worse than honest default for them). Borrower also lost collateral access (worse than honest default for them). Mutual destruction outcome.
+Same as 6.1 — lender broadcasts Tx-B at maturity + grace. Borrower's heirs lose collateral but kept the principal at origination.
+
+### 6.3 Lender disappears / loses keys
+
+Borrower broadcasts Tx-Repay normally. Lender's pre-signature is in the template — the broadcast doesn't require lender to be alive or available. Settlement happens unilaterally.
+
+This is a meaningful improvement over earlier `makeoffer`-based designs which required lender's live participation.
+
+### 6.4 Optional: Panic button (revocation)
+
+The Loan-ID's revocation authority is set to the borrower's personal ID. This gives the borrower a unilateral nuclear option: revoking the Loan-ID invalidates all pre-signed transactions referencing the i-address (including Tx-Repay, Tx-B, Tx-C).
+
+In the canonical ANYONECANPAY-based design, the panic button is **not required for the over-collateralization arbitrage attack** (the lender cannot stonewall, since their commitment is already in Tx-Repay). It exists for rare scenarios:
+
+- Smart contract bug discovered post-origination — borrower can freeze the loan to prevent exploitation
+- Lender's keys provably compromised mid-loan — borrower freezes to prevent attacker from claiming via Tx-B
+- Mutual decision to abandon the loan and renegotiate (both parties cooperate via 2-of-2 recovery)
+
+The panic button creates mutual deadlock. Borrower also loses collateral access until 2-of-2 recovery cooperation. Therefore it's a deterrent, not a routine tool.
+
+### 6.5 Both parties die / lose keys simultaneously
+
+Funds locked on chain. Heirs may eventually find the off-chain pre-signed transactions and broadcast them. If not, collateral is permanently inaccessible. Acceptable trade-off — the protocol is not responsible for inheritance.
 
 ---
 
@@ -280,47 +280,47 @@ If they don't: collateral is frozen forever. Lender lost their entire claim (wor
 
 | Scenario | Outcome |
 |---|---|
-| Cooperation, normal repayment | takeoffer atomic settlement |
+| Cooperation, normal repayment | Borrower broadcasts Tx-Repay; atomic settlement |
 | Borrower defaults | Tx-B at maturity + grace |
-| Borrower dies/loses keys before maturity | Same as default — lender claims via Tx-B |
-| Lender dies/loses keys before borrower repays | Tx-C at maturity + 1 year |
+| Borrower dies/loses keys before maturity | Same as default |
+| **Lender dies/loses keys before borrower repays** | **Borrower broadcasts Tx-Repay normally — pre-signature is sufficient** |
 | Both die | Funds locked on chain; not the protocol's problem |
-| Lender refuses valid repayment | Borrower revokes → mutual freeze → forced negotiation |
-| Borrower revokes maliciously | Mutual freeze; borrower also loses collateral access; worse than default |
-| Stranger tries to take repayment offer | Rejected: `error -8: no authority to deliver Loan-ID` |
-| Stranger attempts other front-run | Cannot deliver Loan-ID without 2-of-2 authority |
-| Subjective dispute (lender claims borrower didn't pay; borrower claims lender refused) | Off-chain courts. Chain record is admissible evidence. |
+| Lender attempts to refuse repayment | Cannot — pre-signed Tx-Repay does not require lender's runtime cooperation |
+| Lender attempts to claim via Tx-B early | Cannot — nLockTime prevents pre-maturity broadcast |
+| Lender attempts to claim via Tx-B after Tx-Repay broadcast | Cannot — collateral UTXO already consumed |
+| Stranger tries to intercept Tx-Repay broadcast | Cannot — tx is complete and atomic; no offer in mempool to race |
+| Stranger tries to substitute their address into outputs | Cannot — outputs are signed-locked by lender's pre-signature |
+| Borrower revokes Loan-ID maliciously | Mutual freeze. Borrower also loses collateral access. Lender can sue with chain evidence. |
+| Subjective dispute (e.g. "lender's address was wrong at origination") | Off-chain courts. Chain record is admissible evidence. |
 | Borrower's R-address compromised | User-side OPSEC issue; mitigate with VerusID-controlled R-addresses with proper recovery |
 | Lender's R-address compromised | Same |
-| Tx-B leaked publicly | Output goes to lender only; strangers gain nothing by broadcasting |
-| Tx-C leaked publicly | Output goes to borrower only; strangers gain nothing |
-| Tx-B lost by lender | Tx-C eventually fires at maturity + 1 year; borrower wins |
-| Tx-C lost by borrower | If lender broadcasts Tx-B, settled; if both lose: stuck |
-| Identity primary changed during loan term (cooperative) | Both parties agreed; new state; pre-signed txs may need re-signing on new state |
-| Forking attack / chain reorg | Standard handling; low-confirmation settlement risk only |
-| Lender's R-address itself is compromised, attacker tries to receive payment | If lender's R is controlled by an ID with proper recovery, lender's heirs can claim back via personal-ID recovery |
+| Tx-Repay leaked publicly | Anyone can attempt to broadcast, but only the borrower has UTXOs to add as funding inputs and complete the tx; outputs go to lender + borrower as agreed |
+| Tx-B leaked publicly | Output goes to lender only; strangers gain nothing |
+| Tx-Repay lost by borrower | Borrower can request a re-signing from lender (cooperative). If lender refuses, borrower defaults. |
+| Tx-B lost by lender | Lender loses default-claim path; borrower's Tx-Repay still works for cooperative repayment; on default with no Tx-B, borrower can still recover via Tx-C at maturity + extended_lockout. |
+| Identity primary changed during loan term (cooperative) | Both parties agreed; pre-signed txs may need re-signing (rare; only on agreed renegotiation) |
 
 ---
 
 ## 8. Off-chain storage requirements
 
-Tx-B and Tx-C must survive the entire loan term. They are simple hex strings; durability is the holder's responsibility.
+Tx-Repay, Tx-B, and Tx-C must survive the entire loan term. They are simple hex strings; durability is the holder's responsibility.
 
 ### Recommended storage practices
 
 - Multiple copies (cloud encrypted backup, offline storage, trusted third party hold)
-- Both parties may keep copies of both txs (mutual backup)
-- Store the predicted Tx-A txid alongside Tx-B/Tx-C — needed to validate they remain broadcastable
+- Both parties may keep copies of all three txs (mutual backup)
+- Store the predicted Tx-A txid alongside — needed to validate broadcastability
 - Optional: print as paper hex for offline storage
 
 ### Loss scenarios
 
 | Lost item | Consequence |
 |---|---|
-| Tx-B | Lender loses default-claim path; Tx-C eventually fires for borrower |
-| Tx-C | Borrower loses rescue path; if lender broadcasts Tx-B normally, no harm |
-| Both | Borrower's collateral is stranded if lender disappears AND borrower defaults |
-| Loan-ID multimap (loan terms) | On-chain, cannot be lost; just look up via getidentity |
+| Tx-Repay (borrower) | Borrower loses canonical repayment path; can request re-signing from lender (cooperation needed) |
+| Tx-B (lender) | Lender loses default-claim; Tx-C eventually fires for borrower at extended_lockout |
+| Tx-C (borrower) | Last-resort backup gone; if lender broadcasts Tx-B normally, no harm |
+| All three | Depends on cooperation: if both parties online and willing, can re-sign. If not, borrower's only option is to never repay (and accept losing collateral via Tx-B), or default cleanly. |
 
 ---
 
@@ -330,14 +330,15 @@ Tx-B and Tx-C must survive the entire loan term. They are simple hex strings; du
 
 A reference wallet implementation should:
 
-1. **Origination ceremony coordinator**: walk both parties through the multi-step signing in sequence, warn if Tx-B/Tx-C signing is skipped
-2. **Rescue tx storage**: encrypted backup of Tx-B/Tx-C with cloud sync option, paper-export option, status tracking (which loans have which txs stored)
-3. **Pending action notification**: prompt borrower well before maturity to either repay or default; prompt lender well before grace to broadcast Tx-B if no repayment
-4. **Race condition watcher**: borrower-side automation to revoke if lender broadcasts Tx-B while borrower's repayment offer is still pending
+1. **Origination ceremony coordinator**: walk both parties through the multi-step signing in sequence; warn if any pre-signed tx is skipped
+2. **Pre-signed tx storage**: encrypted backup of Tx-Repay/Tx-B/Tx-C with cloud sync option, paper-export option, status tracking per loan
+3. **Repayment helper**: at borrower's request, automatically consolidate UTXOs and append to Tx-Repay template with correct change output structure
+4. **Default-claim notification**: prompt lender well before grace period ends to broadcast Tx-B if no Tx-Repay broadcast
+5. **Tx-Repay expiry warning**: prompt borrower before Tx-Repay's expiryheight passes; once expired, only Tx-C remains as borrower's recovery path
 
 ### Loan terms multimap schema
 
-Stored in the Loan-ID's contentmultimap under a VDXF key (one possibility):
+Stored in the Loan-ID's contentmultimap under a VDXF key. Suggested structure:
 
 ```json
 {
@@ -348,7 +349,7 @@ Stored in the Loan-ID's contentmultimap under a VDXF key (one possibility):
       "interest": <amount>,
       "maturity_block": <number>,
       "grace_blocks": <number>,
-      "lockout_blocks": <number>,
+      "extended_lockout_blocks": <number>,
       "currency": "<currency-id>",
       "borrower_id": "<borrower-personal-id>",
       "lender_id": "<lender-personal-id>",
@@ -358,24 +359,20 @@ Stored in the Loan-ID's contentmultimap under a VDXF key (one possibility):
 }
 ```
 
-The schema is flexible; what matters is consistent recording for off-chain tooling and dispute evidence.
-
 ### Currency support
 
-The loan can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, vUSDC, etc.), or PBaaS chain currencies. Both parties just agree on the currency at origination and structure Tx-A/Tx-B accordingly.
-
-The collateral can be a different currency from the principal (e.g., principal in vUSDC, collateral in VRSC).
+The loan can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, vUSDC, etc.), or PBaaS chain currencies. The collateral can be a different currency from the principal.
 
 ### LTV (loan-to-value) recommendations
 
-Higher LTV reduces lender's incentive to stonewall (smaller arbitrage gain). Recommended ranges:
+With ANYONECANPAY pre-signed repayment, lender stonewalling is structurally impossible, so the LTV ↔ trust trade-off shifts. The remaining concern is borrower default risk:
 
-- **Strangers**: don't lend
-- **Reputation-bonded counterparties**: 50-70% LTV typical
+- **Strangers**: don't lend (no protocol-level reputation system)
+- **Reputation-bonded counterparties**: 50-70% LTV common
 - **Trusted relationships**: 30-50% LTV acceptable
-- **Tight LTV (>80%)**: lower interest justified; minimal arbitrage incentive
+- **Tight LTV (>80%)**: lower interest justified; minimal default arbitrage incentive remains
 
-Lower LTV = larger temptation for lender to grab collateral despite borrower offering valid repayment. The panic button defends against this, but operationally borrower must be vigilant about revoking before Tx-B fires if lender stonewalls.
+Lower LTV = higher temptation for borrower to default and let lender claim collateral. Choose to match counterparty trust level.
 
 ---
 
@@ -383,46 +380,48 @@ Lower LTV = larger temptation for lender to grab collateral despite borrower off
 
 ### What this protocol cannot do
 
-- **Force a stonewalling lender to accept payment**. The panic button creates a deterrent (mutual destruction), but if both parties are willing to mutually destroy, borrower cannot force settlement. Real-world courts handle subjective disputes.
-- **Eliminate the borrower's option to maliciously revoke**. The deterrent is economic (borrower loses just as much as honest default). Bad actors can still freeze loans for spite.
+- **Force borrower to repay**. Borrower-side default is the borrower's choice; protocol provides Tx-B for lender's recourse.
+- **Eliminate borrower's option to maliciously revoke**. The deterrent is economic (borrower loses collateral access too). Bad actors can still freeze loans for spite.
 - **Protect against private-key compromise**. User-side OPSEC. Use VerusIDs with recovery for personal addresses.
-- **Provide instant on-chain dispute resolution**. The 1-year rescue period is the longest fallback. Faster resolution requires arbiters (excluded by design).
+- **Provide instant on-chain dispute resolution**. Pre-signed transactions cover the main cases; subjective disputes go to real-world courts.
+- **Support variable-rate or amortizing loans**. Tx-Repay's outputs are signed-locked at origination. Variable terms require re-signing.
 
 ### What requires off-chain trust
 
-- **Identifying the counterparty**: this is a private agreement between two known parties. The protocol doesn't help find or vet counterparties.
+- **Identifying the counterparty**: this is a private agreement between two known parties.
 - **Pricing the loan correctly (LTV, interest)**: borrower and lender agree off-chain.
 - **Subjective disputes**: real-world legal action, with chain evidence.
 
 ### Untested aspects (conservative assumptions)
 
-- Verus mainnet behavior under chain-reorg stress for the panic button mechanism
-- Behavior when the Loan-ID's parent identity itself is revoked during a loan term
-- Coordinated multi-loan ceremonies (e.g., refinancing one loan with proceeds of another)
+- Verus mainnet behavior under chain-reorg stress for ANYONECANPAY signatures (well-tested in Bitcoin generally, should hold on Verus).
+- Behavior when the Loan-ID's parent identity is revoked during a loan term.
+- Cross-chain loan denominations involving Verus PBaaS bridges.
 
 ---
 
 ## 11. Reference: empirically validated primitives
 
-Each of the following was directly tested on Verus mainnet during development:
+Each of the following was directly tested on Verus mainnet during development. See [TESTING.md](./TESTING.md) for txid references and detailed methodology.
 
-| Primitive | Validation |
+| Primitive | Validation status |
 |---|---|
-| 2-of-2 multisig identity prevents unilateral redirect | Confirmed via takeoffer cosigning behavior |
-| Atomic origination via `createrawtransaction` + multi-party `signrawtransaction` | Confirmed: tx 83500de4...0802e2 broadcast and confirmed |
-| Repayment via `makeoffer`/`takeoffer` 2-of-2 cosign | Confirmed: tx a47bb608...153833 broadcast and confirmed |
-| Borrower-makes-offer is front-run-safe (stranger cannot deliver) | Confirmed: stranger source returns `error -8: no authority to sign for delivering ID` |
-| `closeoffers` works as renege defense | Confirmed across multiple test offers |
-| Recovery overrides 2-of-2 (when revoke and recover paired) | Confirmed via VLotto test ID redirect |
-| Verus refuses self-recovery revokes | Confirmed: `error -8: Cannot revoke an identity with self as the recovery authority` |
-| nLockTime works on regular tx | Confirmed: tx 4bdb627f...79e64 rejected pre-locktime, accepted post-locktime |
-| nLockTime works on 2-of-2 i-address spend (Tx-B pattern) | Confirmed: tx 7daa9277...3a6162a — same hex rejected at block 4049178, accepted at block 4049183 |
-| Borrower's revokeidentity invalidates pre-signed Tx-B | Confirmed: post-revoke broadcast returns `error 16: mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)` |
-| For-clause identity-definition does NOT enforce contents | Confirmed: empty Pay-ID delivery succeeded in tx f9d49b26...589f32dc3 — borrower received Loan-ID with collateral despite empty Pay-ID |
-| For-clause cannot combine identity + currency | Confirmed: extra fields silently ignored; resulting hex byte-identical with or without them |
-| Stranger CAN take currency-for-ID offer | Confirmed: tx d53c8d45...12fcff98c3 — wallet without offerer's keys successfully broadcast takeoffer |
+| 2-of-2 multisig identity prevents unilateral redirect | ✅ |
+| Atomic origination via raw multi-party tx | ✅ |
+| Repayment via takeoffer 2-of-2 cosign | ✅ (alternative pattern) |
+| Borrower-makes-offer is front-run-safe | ✅ |
+| `closeoffers` works as renege defense | ✅ |
+| Recovery overrides 2-of-2 | ✅ |
+| Verus refuses self-recovery revokes | ✅ |
+| nLockTime works on regular tx | ✅ |
+| nLockTime works on 2-of-2 i-address spend (Tx-B pattern) | ✅ |
+| Borrower's revoke invalidates pre-signed Tx-B (panic button) | ✅ |
+| For-clause identity-definition does NOT enforce contents | ❌ (ruled out Pay-ID pattern) |
+| For-clause cannot combine identity + currency | ❌ |
+| Stranger CAN take currency-for-ID offer | ❌ (ruled out Loan-ID-makes-offer pattern) |
+| **`SIGHASH_ALL \| SIGHASH_ANYONECANPAY` accepted on 2-of-2 i-address spends** | ✅ (canonical Tx-Repay mechanism) |
 
-The negative results (last three rows) drove the choice of borrower-makes-offer pattern over Loan-ID-makes-offer pattern.
+The negative results (rows marked ❌) drove the choice of pre-signed Tx-Repay using SIGHASH_ANYONECANPAY over the alternative offer-based patterns.
 
 ---
 
@@ -432,8 +431,8 @@ The negative results (last three rows) drove the choice of borrower-makes-offer 
 - **Origination ceremony tool** (web-based or CLI for guided multi-party signing)
 - **BTC collateral integration** via Verus Swap atomic-swap mechanics
 - **Reputation system** layered on contentMultimap for repeat counterparties
+- **Variable-rate loan support** via periodic Tx-Repay re-signing protocol
 - **Spec for syndicated/multi-party loans** (multiple lenders pool into one Loan-ID)
-- **Investigation of for-clause hidden fields** to determine if a constrained Pay-ID pattern is achievable
 
 ---
 
@@ -442,8 +441,23 @@ The negative results (last three rows) drove the choice of borrower-makes-offer 
 - **R-address**: Verus's standard transparent address, single-sig public key hash
 - **i-address**: Verus identity address, derived from name + parent
 - **Loan-ID**: A VerusID created per loan to hold collateral and serve as the contract notary
-- **Tx-A / Tx-B / Tx-C**: The three pre-signed transactions of the loan lifecycle
-- **`makeoffer`/`takeoffer`**: Verus's native atomic-swap RPCs
+- **Tx-A / Tx-Repay / Tx-B / Tx-C**: The four pre-signed transactions of the loan lifecycle
+- **`makeoffer`/`takeoffer`**: Verus's native atomic-swap RPCs (alternative to ANYONECANPAY for cooperative settlement)
 - **VDXF**: Verus Data Exchange Format, used for canonical key derivation in contentmultimap
 - **2-of-2 multisig**: An identity requiring 2 signatures from 2 specified addresses
 - **nLockTime**: Bitcoin/Verus tx-level timelock — chain rejects broadcast before specified block height
+- **SIGHASH flag**: Bitcoin/Verus signature scope specifier; controls which parts of a tx the signature commits to
+- **SIGHASH_ALL**: Default; signature covers all inputs and all outputs
+- **SIGHASH_ANYONECANPAY**: Modifier; signature covers only its own input (other inputs can be added/changed)
+- **SIGHASH_SINGLE | SIGHASH_ANYONECANPAY**: Combined; signature covers only its own input + the output at the same index. Used in Tx-Repay so lender's signature locks only the lender's payment output, leaving borrower's input/output flexible.
+
+## Appendix B: Alternative repayment pattern (legacy / makeoffer-based)
+
+For implementations that cannot use SIGHASH_ANYONECANPAY for some reason, an alternative repayment pattern exists using Verus's makeoffer/takeoffer RPCs:
+
+- Borrower posts `makeoffer` at repayment time (currency for Loan-ID transferred to borrower)
+- Lender 2-of-2 cosigns takeoffer; atomic settlement
+- Lender CAN stonewall by refusing to cosign
+- Borrower's revoke (panic button) is the deterrent against stonewalling
+
+This pattern was empirically validated during development. The ANYONECANPAY pattern in §3-§5 is preferred because it eliminates the lender stonewall problem structurally rather than relying on a deterrent.
