@@ -64,7 +64,7 @@ This is a protocol-level safeguard against trivial revoke-then-self-recover seiz
 - At block 4049183: same hex accepted, confirmed
 - Validates the pre-signed default-claim mechanism.
 
-### 10. Borrower's revoke invalidates pre-signed Tx-B (panic button)
+### 10. Borrower's revoke invalidates pre-signed Tx-B (historical — no longer used in canonical design)
 - VLotto 108 configured with revocation = steve.bitcoins@ (borrower-controlled), recovery = steve.bitcoins@ (non-self)
 - Tx-B pre-signed (2-of-2 cosigned) with future nLockTime
 - nLockTime reached, Tx-B is broadcast-eligible
@@ -76,7 +76,8 @@ This is a protocol-level safeguard against trivial revoke-then-self-recover seiz
                   (Script evaluated without error but finished with a false/empty top stack element)
   ```
 - The pre-signed signatures, valid at sign-time, are no longer accepted by consensus while the identity is revoked.
-- Validates the panic button as a real deterrent (used as optional safety net in canonical design).
+
+**Note (v0.3):** This test validated the panic button mechanism. With the introduction of the SIGHASH_ANYONECANPAY canonical repayment pattern (test 14 below), lender stonewalling becomes structurally impossible rather than economically deterred. The panic button is no longer part of the canonical design — Loan-IDs in v0.3 have null revocation/recovery authorities. This test result remains useful empirical knowledge about Verus revocation semantics but is not load-bearing for the protocol.
 
 ### 11. For-clause identity-definition does NOT enforce contents
 Test of the "Pay-ID" pattern:
@@ -130,9 +131,9 @@ Conclusive test of the front-run vulnerability for currency-for-ID offers:
 | Loan-ID-makes-offer (currency-for-ID) at origination | Front-run vulnerable | ❌ rejected |
 | Loan-ID-makes-offer (Pay-ID swap) at origination | Empty Pay-ID delivery accepted | ❌ rejected |
 | Pre-signed Tx-B with nLockTime | Works | ✅ default-claim mechanism |
-| Pre-signed Tx-C with nLockTime (same shape as Tx-B) | Works (by extension) | ✅ rescue mechanism (optional) |
-| Borrower's revoke invalidates pre-signed Tx-B | Works | ✅ panic button (optional safety net) |
-| Verus refuses self-recovery revokes | True (protocol-level) | n/a — informs design |
+| Pre-signed Tx-C with nLockTime (same shape as Tx-B) | Works (by extension) | ✅ optional last-resort rescue |
+| Borrower's revoke invalidates pre-signed Tx-B | Works | ⚠️ historical — no longer used (canonical design has null revoke/recover) |
+| Verus refuses self-recovery revokes | True (protocol-level) | n/a — informational only |
 | **Pre-signed Tx-Repay with SIGHASH_ANYONECANPAY** | **Works** | ✅ **canonical repayment mechanism** |
 
 ## State on chain after tests
