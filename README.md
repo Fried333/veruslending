@@ -2,6 +2,8 @@
 
 A peer-to-peer collateralized credit protocol on Verus.
 
+![VerusLending Protocol Lifecycle](https://raw.githubusercontent.com/Fried333/veruslending/main/diagram.svg)
+
 ## In one sentence
 
 Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of repayment, default, and rescue paths — no arbiter, no committee, no third-party intermediary, no liquidation bots, no panic button.
