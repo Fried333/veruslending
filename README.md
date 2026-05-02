@@ -24,7 +24,7 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 |---|---|
 | Loan-ID structure (2-of-2 multisig, no recovery, no revoke) | ✅ validated |
 | Atomic origination (raw multi-party tx) | ✅ validated |
-| **Pre-signed Tx-Repay (SIGHASH_ANYONECANPAY)** — canonical | ✅ validated |
+| **Pre-signed Tx-Repay (SIGHASH_SINGLE\|ANYONECANPAY)** — canonical | ✅ validated |
 | Default claim (Tx-B with nLockTime) | ✅ validated |
 | Borrower's rescue (Tx-C, structurally identical to Tx-B) | ✅ validated by extension |
 | Front-run protection (no offer ever in mempool) | ✅ structural |

@@ -112,7 +112,7 @@ Conclusive test of the front-run vulnerability for currency-for-ID offers:
 - **A stranger without the offerer's signing keys took an offer that the offerer made.** The cryptocondition pre-authorizes consumption; takers don't need offerer's runtime signature.
 - Empirically rules out Loan-ID-makes-offer-for-currency at origination as a viable pattern.
 
-### 14. SIGHASH_ALL | SIGHASH_ANYONECANPAY accepted on 2-of-2 i-address spend (canonical Tx-Repay)
+### 14. SIGHASH_ALL | SIGHASH_ANYONECANPAY accepted on 2-of-2 i-address spend
 - **Tx**: `792b12d25cf5dab5a101ea5162623564f2b792cb872e8f4e09610b28f345e6a4`
 - Inputs: borrower's RJ6Xejo UTXO (0.9998 VRSC) + 2-of-2 cosigned i-address UTXO (0.5 VRSC)
 - Both 2-of-2 sigs on the i-address input use `ALL|ANYONECANPAY` sighash
@@ -120,8 +120,27 @@ Conclusive test of the front-run vulnerability for currency-for-ID offers:
 - `signrawtransaction` reports `complete: True, errors: 0`
 - Broadcast accepted; tx confirmed
 - Outputs: 0.6 VRSC → lender; 0.8997 VRSC → borrower (combined collateral + change)
-- Validates the **canonical pre-signed Tx-Repay mechanism** described in §3 of SPEC.md
-- Borrower achieves atomic repayment without lender's runtime cooperation; lender's pre-commit at origination is binding
+- First validation that ANYONECANPAY semantics work on cryptocondition outputs (collateral i-addresses).
+- The ALL flag locks all outputs, restricting borrower's flexibility; the SINGLE variant in test 15 below is the canonical pattern.
+
+### 15. SIGHASH_SINGLE | SIGHASH_ANYONECANPAY on 2-of-2 i-address spend (canonical Tx-Repay)
+- **Tx**: `967d509d38d8e81ad6450921e6f7b49dfbd527e918a940c5f0a4c3041cc7e723`
+- Setup: VLotto 103 in 2-of-2 [RJ6Xejo, RHze] state, refunded with 0.5 VRSC at i-address (i6ebrehQ...)
+- Inputs:
+  - Input 0: collateral UTXO at i6ebrehQ (0.5 VRSC)
+  - Input 1: borrower's RJ6Xejo UTXO (0.5 VRSC)
+- Outputs:
+  - Output 0: 0.4 VRSC → RHze (lender's payment, paired with input 0)
+  - Output 1: 0.5999 VRSC → RJ6Xejo (collateral + change, paired with input 1)
+- Sign sequence:
+  - Local signed with `sighashtype="SINGLE|ANYONECANPAY"` → covers input 0 + input 1 against their respective paired outputs
+  - .44 cosigned with same sighash (completes 2-of-2 on input 0)
+  - `signrawtransaction` confirmed `complete: True, errors: 0`
+- Broadcast accepted at block 4049322; confirmed.
+- **Validates the canonical Tx-Repay mechanism specified in SPEC.md §3**.
+- Verus marketplace uses SIGHASH_SINGLE for offers internally (per main dev). Our raw-tx pattern uses the same SIGHASH discipline.
+- Lender's pre-commitment at origination locks ONLY their paired output (Output 0). Borrower has full flexibility for Output 1+ (collateral return + change structure).
+- This is the empirically-confirmed canonical pattern for v0.4+.
 
 ## Summary of design implications
 
@@ -134,7 +153,8 @@ Conclusive test of the front-run vulnerability for currency-for-ID offers:
 | Pre-signed Tx-C with nLockTime (same shape as Tx-B) | Works (by extension) | ✅ optional last-resort rescue |
 | Borrower's revoke invalidates pre-signed Tx-B | Works | ⚠️ historical — no longer used (canonical design has null revoke/recover) |
 | Verus refuses self-recovery revokes | True (protocol-level) | n/a — informational only |
-| **Pre-signed Tx-Repay with SIGHASH_ANYONECANPAY** | **Works** | ✅ **canonical repayment mechanism** |
+| Pre-signed Tx-Repay with SIGHASH_ALL\|ANYONECANPAY | Works | ✅ early validation (heavier-handed variant) |
+| **Pre-signed Tx-Repay with SIGHASH_SINGLE\|ANYONECANPAY** | **Works** | ✅ **canonical repayment mechanism — matches marketplace SIGHASH discipline** |
 
 ## State on chain after tests
 
@@ -148,6 +168,6 @@ These are test artifacts; not consequential to the protocol design.
 
 ## What remains untested (conservative assumptions)
 
-- Whether `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` (rather than `ALL|ANYONECANPAY`) provides the same atomic settlement guarantees with greater output flexibility — assumed yes per Bitcoin SIGHASH semantics, untested on Verus specifically
 - Behavior of pre-signed transactions across chain reorganizations
 - Behavior when input 0 (borrower's funding input) is added at repayment time vs included as a placeholder at origination — assumed equivalent per ANYONECANPAY semantics
+- Cross-chain loan denominations involving Verus PBaaS bridges

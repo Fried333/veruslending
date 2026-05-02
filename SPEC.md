@@ -1,6 +1,6 @@
 # VerusLending — Protocol Specification
 
-**Status:** Draft v0.3 — empirically validated on Verus mainnet
+**Status:** Draft v0.4 — empirically validated on Verus mainnet
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
@@ -402,7 +402,6 @@ Lower LTV = higher temptation for borrower to default and let lender claim colla
 ### Untested aspects (conservative assumptions)
 
 - Verus mainnet behavior under chain-reorg stress for ANYONECANPAY signatures (well-tested in Bitcoin generally, should hold on Verus).
-- Behavior of `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` specifically on cryptocondition-output spends (assumed to work per Bitcoin SIGHASH semantics; the Verus marketplace itself uses SIGHASH_SINGLE for offers, suggesting strong precedent. Empirical test pending).
 - Cross-chain loan denominations involving Verus PBaaS bridges.
 
 ---
@@ -417,8 +416,8 @@ Each of the following was directly tested on Verus mainnet during development. S
 | Atomic origination via raw multi-party tx | ✅ |
 | nLockTime works on regular tx | ✅ |
 | nLockTime works on 2-of-2 i-address spend (Tx-B pattern) | ✅ |
-| **`SIGHASH_ALL \| SIGHASH_ANYONECANPAY` accepted on 2-of-2 i-address spend** | ✅ |
-| `SIGHASH_SINGLE \| SIGHASH_ANYONECANPAY` on cryptocondition outputs | ⏳ pending direct test (assumed equivalent per Bitcoin semantics + marketplace precedent) |
+| `SIGHASH_ALL \| SIGHASH_ANYONECANPAY` accepted on 2-of-2 i-address spend | ✅ |
+| **`SIGHASH_SINGLE \| SIGHASH_ANYONECANPAY` on cryptocondition outputs** | ✅ (canonical Tx-Repay mechanism — matches marketplace's internal SIGHASH discipline) |
 | Borrower-makes-offer is front-run-safe (alternative pattern) | ✅ |
 | Repayment via takeoffer 2-of-2 cosign (alternative pattern) | ✅ |
 | For-clause identity-definition does NOT enforce contents | ❌ (ruled out Pay-ID pattern) |
@@ -433,7 +432,6 @@ Negative results (rows marked ❌) drove the choice of pre-signed Tx-Repay using
 
 ## 12. Future work
 
-- **SIGHASH_SINGLE | ANYONECANPAY direct empirical test** to align with Verus marketplace's internal SIGHASH discipline
 - **Reference wallet implementation** (Verus Wallet V2 extension or standalone)
 - **Origination ceremony tool** (web-based or CLI for guided multi-party signing)
 - **BTC collateral integration** via Verus Swap atomic-swap mechanics
