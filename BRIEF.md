@@ -85,6 +85,7 @@ Vault: `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne` (p2sh, no VerusID)
 | 25 | **Tx-O atomic-swap origination** | ✅ | `023d3256...` |
 | 26 | **Options primitive: pre-paid premium + atomic exercise + expiryheight** | ✅ confirmed | `f48ba0c3...` (block `0000000000004a0c...`) |
 | 27 | **Options expired path: rejection + writer recovers underlying** | ✅ confirmed | `4c53edf6...` (return); exercise-attempt rejected `tx-expiring-soon` |
+| 28 | **SIGHASH-pre-signed Output 0 to a VerusID i-address** | ✅ confirmed | `40104bf7...` |
 
 ### What this proves
 

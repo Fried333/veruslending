@@ -592,6 +592,33 @@ Companion to §26. Validates that an unexercised option correctly expires and th
 
 This is a complete, oracle-free, custodian-free options primitive on Verus today using only existing transparent transaction features.
 
+### 28. SIGHASH-pre-signed Output 0 to a VerusID i-address
+
+Validates that the protocol's primitive works when the sig-locked Output 0 is a VerusID i-address (not just an R-address). Important because lender/borrower may want loan payments to land at their VerusID's i-address (so the multimap reputation system in §13 sees activity at that ID).
+
+**Setup:**
+- Pre-existing VerusID: `i65fv1p21V6UeXMcCsE4HmQPxHo8usUKCV` (single-primary, controlled via RKirf)
+
+**Atomic swap mini-test:**
+- Bob's offer template: Input 0 = his 0.1 DAI UTXO, Output 0 = 0.1 DAI → `i65fv1p21V6UeXMcCsE4HmQPxHo8usUKCV` (i-address)
+- Bob signs Input 0 with `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY`
+- Alice extends with her VRSC fee input + change output
+- Alice signs and broadcasts
+
+**Tx:** `40104bf7b5eb0d04b429c317a70172d0ac73ddf2dd380b5bdf26f02954c9a409`
+**Confirmed in chain.**
+
+**Final state:**
+- `i65fv1p21V6UeXMcCsE4HmQPxHo8usUKCV` balance: +0.1 DAI ✓ (verified via getaddressbalance)
+
+**Validates:**
+- ✅ Output 0 sig-lock works when recipient is a VerusID i-address (cryptocondition output type)
+- ✅ Verus's signrawtransaction handles SIGHASH_SINGLE|ANYONECANPAY identically for R-address and i-address recipients
+- ✅ Wallets can sig-lock payments to a VerusID without changing the protocol
+- ✅ Enables the §13 reputation flow where loan outcomes credit the parties' VerusIDs directly
+
+This unlocks the recommended Profile L vault + Profile-V parties configuration (§2.4): the vault is a cheap p2sh, but loan payments flow to/from the parties' personal VerusIDs, where reputation accumulates.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
