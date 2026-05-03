@@ -9,16 +9,19 @@ Cryptographically-enforced fully-collateralized options. Writer locks underlying
 
 ## What the protocol does
 
-Two-stage lifecycle:
+Five-phase lifecycle:
 
-| Stage | When | Who | What |
-|---|---|---|---|
-| Setup | At creation | Both | Atomic: premium → writer; underlying → vault |
-| Pre-sign exercise + return | At creation | Both | Cooperatively pre-sign settlement templates |
-| Exercise | Any time before expiration | Buyer | Strike payment → writer; underlying → buyer |
-| Expiration | After locktime if not exercised | Writer | Underlying → writer |
+| Phase | When | Who | What | Channel |
+|---|---|---|---|---|
+| 1. Discovery | Writer publishes terms | Writer | `option.offer` multimap entry on writer's VerusID | chain (VerusID multimap) |
+| 2. Coordination | Buyer wants to take | Both | Exchange pubkeys, derive vault | encrypted multimap entry, or paste |
+| 3. Atomic setup | Both ready | Both | Atomic: premium → writer; underlying → vault | `makeoffer` / `takeoffer` |
+| 4. Pre-sign templates | At setup | Both | Cooperatively pre-sign exercise + return | cooperative cosign |
+| 5. Exercise / expire | Anytime / after locktime | Buyer or Writer | Settlement | unilateral broadcast |
 
-The vault is a 2-of-2 between writer and buyer. Profile V (VerusID) recommended — supports any-currency underlying.
+The vault is a **2-of-2** between writer and buyer:
+- **Profile L** (p2sh) — VRSC underlying only, zero registration cost
+- **Profile V** (VerusID i-address) — any currency underlying, sub-ID registration cost (~0.1 VRSC). Required for non-VRSC underlying because the chain enforces non-VRSC outputs go to i-addresses.
 
 ## What the user does
 
@@ -32,9 +35,69 @@ In CLI mode: ~6 RPC calls per option lifetime.
 
 **Terms**: Writer (Bob) sells a call on 1 VRSC. Strike = 0.5 DAI. Premium = 0.05 DAI. Expiration = block N+1000.
 
-### Step 1 — Atomic setup (premium + underlying lock)
+### Phase 1 — Discovery (writer publishes the option)
 
-Single atomic tx via makeoffer/takeoffer with vault as accept address (validated TESTING §36):
+Bob posts his terms to his VerusID's multimap so anyone scanning the chain (or an explorer indexer) can find him. No buyer involved yet.
+
+```bash
+# Build the offer JSON
+OFFER='{
+  "version": 1,
+  "type": "call",
+  "underlying": {"currency":"VRSC",     "amount":1},
+  "strike":     {"currency":"DAI.vETH", "amount":0.5},
+  "premium":    {"currency":"DAI.vETH", "amount":0.05},
+  "expiration_block": '"$(($(verus getblockcount) + 1000))"',
+  "writer_pubkey": "<bob_compressed_pubkey>",
+  "writer_address": "BOB_R_ADDRESS",
+  "active": true
+}'
+HEX=$(echo -n "$OFFER" | python3 -c "import sys; print(sys.stdin.read().encode().hex())")
+
+# Get the VDXF id for vrsc::contract.option.offer
+verus getvdxfid "vrsc::contract.option.offer"
+# Returns: {"vdxfid":"i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY", ...}
+
+# Write to Bob's VerusID
+verus updateidentity '{
+  "name": "bob.writer@",
+  "contentmultimap": {
+    "i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY": ["'$HEX'"]
+  }
+}'
+```
+
+The offer is now publicly readable on chain. Buyers find it via direct ID lookup (`getidentity bob.writer@`) or via a chain indexer that scans for `vrsc::contract.option.offer` entries. See [marketplace.md](./marketplace.md).
+
+### Phase 2 — Coordination (vault derivation)
+
+Alice reads Bob's offer (chain-native, no comms required) and gets `writer_pubkey`. She then needs Bob to know HER pubkey so they can both compute the same 2-of-2 vault.
+
+Two ways to send the buyer's pubkey:
+
+- **Encrypted `option.accept` multimap entry on Alice's own VerusID**, addressed to Bob's z-key (chain-native, asynchronous)
+- **Out-of-band paste** (Discord, email, QR — fine for known parties)
+
+Once Bob has Alice's pubkey, both compute the same vault:
+
+```bash
+WRITER_PUB=<from offer>
+BUYER_PUB=<from acceptance>
+
+# For VRSC underlying (Profile L vault):
+verus createmultisig 2 "[\"$WRITER_PUB\",\"$BUYER_PUB\"]"
+# Returns: {"address":"b...", "redeemScript":"..."}
+
+# For non-VRSC underlying (Profile V vault required):
+# Cooperatively register a sub-ID with primaryaddresses=[both R-addrs] and minsig=2.
+# The i-address of that ID is the vault.
+```
+
+Both parties now have the vault address.
+
+### Phase 3 — Atomic setup (premium + underlying lock)
+
+Single atomic tx via `makeoffer`/`takeoffer` with the vault as accept address (validated TESTING §36):
 
 ```bash
 # Bob (writer) makes offer: GIVE 1 VRSC, FOR 0.05 DAI premium to Bob's address
@@ -47,7 +110,7 @@ ssh bob "verus makeoffer 'BOB_R_ADDRESS' '{
 
 # Wait for offer to confirm
 
-# Alice (buyer) takes the offer, ACCEPTING the underlying at the VAULT (not her own address)
+# Alice (buyer) takes the offer, ACCEPTING the underlying at the VAULT (computed in Phase 2)
 verus takeoffer "ALICE_R_ADDRESS" '{
   "changeaddress": "ALICE_R_ADDRESS",
   "txid": "<offer-txid>",
@@ -66,7 +129,7 @@ verus takeoffer "ALICE_R_ADDRESS" '{
 
 Pure stock CLI. No helper. **Validated mainnet — TESTING §36 (txid `c419b7fc...`).**
 
-### Step 2 — Cooperatively pre-sign exercise + return templates
+### Phase 4 — Cooperatively pre-sign exercise + return templates
 
 ```bash
 TXSETUP=<setup-txid from step 1>
@@ -106,11 +169,11 @@ verus createrawtransaction \
 # Held by BOB (writer)
 ```
 
-### Step 3 — Active period
+### Phase 5 — Active period
 
 Nothing happens on chain. Both parties hold their hex. Buyer holds exercise; writer holds return.
 
-### Step 4a — Exercise (buyer triggers, before expiration)
+### Phase 6a — Exercise (buyer triggers, before expiration)
 
 Buyer adds her DAI strike input to the template and broadcasts. **Needs the helper script** (broadcaster-pays-fee variant):
 
@@ -130,7 +193,7 @@ verus sendrawtransaction $(jq -r .hex /tmp/exercise_complete.json)
 
 **Result**: Bob receives 0.5 DAI strike; Alice receives 1 VRSC underlying; vault is consumed.
 
-### Step 4b — Expiration (writer triggers, after locktime)
+### Phase 6b — Expiration (writer triggers, after locktime)
 
 Writer adds VRSC fee input and broadcasts the return template:
 
@@ -152,12 +215,14 @@ ssh bob "verus signrawtransaction $(cat /tmp/return_extended.hex) | verus sendra
 
 | Phase | Pure CLI? |
 |---|---|
-| Step 1: atomic setup | ✅ `makeoffer` + `takeoffer` |
-| Step 2: pre-sign templates | ✅ `signrawtransaction null null "SINGLE\|ANYONECANPAY"` |
-| Step 4a: exercise | ❌ needs `helpers/extend_tx.py` |
-| Step 4b: expiration recovery | ❌ needs `helpers/extend_tx.py` |
+| Phase 1: discovery (post offer to multimap) | ✅ `updateidentity` |
+| Phase 2: coordination (vault derivation) | ✅ `createmultisig` (Profile L) — Profile V needs sub-ID registration |
+| Phase 3: atomic setup | ✅ `makeoffer` + `takeoffer` |
+| Phase 4: pre-sign templates | ✅ `signrawtransaction null null "SINGLE\|ANYONECANPAY"` |
+| Phase 6a: exercise | ❌ needs `helpers/extend_tx.py` |
+| Phase 6b: expiration recovery | ❌ needs `helpers/extend_tx.py` |
 
-Steps 1-2 are pure CLI. Steps 4a/4b need the helper for the extension at broadcast time. Same gap as the lending protocol's Tx-Repay.
+Phases 1-4 are pure CLI. Phases 6a/6b need the helper for tx extension at broadcast time. Same gap as the lending protocol's Tx-Repay.
 
 ---
 
