@@ -492,9 +492,19 @@ Profile L lacks on-chain storage for loan terms. Keep a signed copy off-chain (e
 
 ### Currency support
 
-The loan can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, DAI.vETH, tBTC.vETH, vUSDC), or PBaaS chain currencies. The collateral can be a different currency from the principal.
+**Principal, interest, repayment** can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, DAI.vETH, tBTC.vETH, vUSDC), or PBaaS chain currencies.
 
-For non-VRSC collateral, use the broadcaster-pays-fee variant (R-β / B-β) so settlement transactions can attach a separate small VRSC input for fees.
+**Collateral has constraints** discovered during mainnet validation (TESTING.md §31):
+
+- ✅ **VRSC collateral** works in all profiles (L and V), with the canonical async-pre-sign primitive. All existing validated tests use this.
+- ❌ **Non-VRSC collateral in Profile L (p2sh vault)** is rejected by Verus at broadcast — reserve-currency cryptocondition outputs to plain p2sh script hashes are non-standard. The vault for non-VRSC collateral must be a VerusID i-address (Profile V).
+- ⚠️ **Non-VRSC-only collateral in Profile V (i-address vault)** can be deposited (Tx-A works), but the canonical settlement templates *cannot* be pre-signed with `SIGHASH_SINGLE|ANYONECANPAY`. The Verus signer fails with `Opcode missing or not understood` when Input 0 is a reserve-currency-only cryptocondition. Settlement is still possible via cooperative SIGHASH_ALL (both parties online together at settlement time), but loses the protocol's "lender can be offline / dead at repayment" property.
+
+**Practical recommendation:** Make collateral VRSC-valued. Principal, interest, and repayment can be any currency. This matches every validated test (§16-§30) and preserves all of the protocol's load-bearing properties.
+
+**Workaround for non-VRSC collateral with async settlement (untested):** include a small VRSC dust value in the vault output alongside the reserve currency. The mixed-currency output may give the SIGHASH_SINGLE signer the VRSC anchor it needs. Worth a follow-up validation; not currently a recommended path.
+
+For non-VRSC collateral when async settlement isn't required (e.g. parties are willing to coordinate at maturity): use Profile V vault + cooperative SIGHASH_ALL settlement.
 
 ### LTV (loan-to-value) recommendations
 

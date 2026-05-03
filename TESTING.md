@@ -674,6 +674,50 @@ Validates that the SIGHASH_SINGLE|ANYONECANPAY primitive works for **non-lending
 
 This is the same primitive the Verus marketplace uses internally for offer construction, exposed at the raw-tx level. Combined with the lending validations (§16-§29) and options (§26-§27), the test set demonstrates the primitive's **generality**: same building block, multiple applications. A wallet that implements the SIGHASH ceremony for one application gets the others for free.
 
+### 31. H1: non-VRSC collateral — discoveries and validated cooperative settlement
+
+Attempted: full lending lifecycle with DAI as collateral and VRSC as principal. Surfaced two important Verus implementation findings.
+
+**Tx-A — DAI collateral to vault:**
+
+Attempt 1: vault = p2sh `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne`.
+- Output 0: 5 DAI → p2sh
+- Decoded output type: `nonstandard`, addrs: None
+- Broadcast attempt: `error code: -26 — 16: bad-txns-failed-params-precheck`
+- **Finding 1: reserve-currency cryptocondition outputs to plain p2sh are non-standard.** Reserve transfers must target an R-address or VerusID i-address. Profile L (pure p2sh vault) cannot hold non-VRSC reserves.
+
+Attempt 2: vault = VerusID `i6ebrehQ6dyJGjy8LoxkaPfJ2Vo7dXGbHy` (Profile V).
+- Tx: `982f302c32cbeb964077036c7d88756d19bd2153d3840d667d0c1c63b9ef4bf8`
+- 5 DAI deposited at vault i-address ✓ (cryptocondition output, standard)
+
+**Pre-signing Tx-Repay attempt (SIGHASH_SINGLE|ANYONECANPAY):**
+
+- Input 0: vault's 5 DAI UTXO (cryptocondition reserve-transfer output)
+- Output 0: 0.55 VRSC → Bob (sig-locked, cross-currency pairing)
+- Result: `complete: False, error: 'Opcode missing or not understood'`
+- **Finding 2: SIGHASH_SINGLE|ANYONECANPAY signing fails on reserve-currency-only cryptocondition inputs.** The Verus signer can't compute the pairing SIGHASH when Input 0 has zero VRSC value (only reserve currency). Default SIGHASH_ALL signing works fine on the same input.
+
+**Validated cooperative-settlement fallback:**
+- Tx: `a454afc256a2436e379c11b4708279579f8fcb53f898da5d973c225412fce899`
+- Inputs: vault 5 DAI + Alice's 0.9999 VRSC (for strike + fee)
+- Outputs: 0.55 VRSC → Bob (strike), 5 DAI → Alice (collateral return), 0.4498 VRSC → Alice (change)
+- Both parties signed at settlement time with default SIGHASH_ALL
+- Confirmed cleanly
+
+**Final state:**
+- Vault: 5 DAI consumed
+- Bob: +0.55 VRSC (effective interest: -0.5 VRSC principal + 0.55 VRSC repayment = +0.05 VRSC)
+- Alice: collateral returned in full, paid 0.05 VRSC interest
+
+**Spec implications:**
+
+- ✅ Cross-currency loans with **VRSC collateral + non-VRSC principal/repayment** = works fully (§18-§21)
+- ⚠️ **Non-VRSC-only collateral** = settlement requires cooperative SIGHASH_ALL (both parties online) — loses the unilateral-broadcast property of the canonical primitive
+- ❌ **Profile L vault + non-VRSC collateral** = impossible (non-standard output rejected at broadcast)
+- 🔮 **Workaround (untested): mixed-currency vault output** with small VRSC dust + reserve, may allow SIGHASH_SINGLE|ANYONECANPAY signing because the input has a VRSC anchor. Worth a follow-up validation.
+
+For the canonical loan design, the recommendation is unchanged: **collateral in VRSC, principal/repayment in any currency**. This matches all existing validated tests (§16-§30).
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
