@@ -10,7 +10,7 @@ A scenario is parameterized along these dimensions. Each test fixes one combinat
 
 | Axis | Values |
 |---|---|
-| **Loan-ID flavor** | `verusid` (2-of-2 + null revoke/recover) — `p2sh` (2-of-2 multisig script) |
+| **vault flavor** | `verusid` (2-of-2 + null revoke/recover) — `p2sh` (2-of-2 multisig script) |
 | **Currency** | `vrsc-only` — `cross-currency` (e.g. VRSC collateral + DAI principal) |
 | **Fee model** | `collateral-pays` — `broadcaster-pays` |
 | **Tx-Repay sighash** | `SIGHASH_SINGLE\|ANYONECANPAY` (canonical) |
@@ -79,10 +79,10 @@ The protocol's *correctness* shouldn't depend on these choices, but each combina
 - **H2**. Repayment in a third currency (different from collateral and from initial principal). E.g., collateral VRSC, principal DAI, repayment in tBTC. (Stretch test; not required.)
 - **H3**. Output 0 has a *currency conversion* operation (`convertto:`). Validates whether SIGHASH locking still binds correctly through a conversion. (Stretch.)
 
-### I. Loan-ID flavor variations
+### I. vault flavor variations
 
-- **I1**. Same scenarios run with VerusID Loan-ID instead of p2sh, to confirm parity. Most validated already in §16/§17.
-- **I2**. VerusID Loan-ID with multimap-stored encrypted hex backup. Tests the "lose your laptop, recover from seed" UX. (Wallet feature; not chain feature.)
+- **I1**. Same scenarios run with VerusID vault instead of p2sh, to confirm parity. Most validated already in §16/§17.
+- **I2**. VerusID vault with multimap-stored encrypted hex backup. Tests the "lose your laptop, recover from seed" UX. (Wallet feature; not chain feature.)
 
 ---
 
@@ -93,7 +93,7 @@ For p2sh-flavor tests:
 - Just use a fresh collateral UTXO. (Each Tx-A creates a new one.)
 
 For VerusID-flavor tests:
-- After test, if Loan-ID is no longer needed, can leave it (2-of-2 idle is fine).
+- After test, if vault is no longer needed, can leave it (2-of-2 idle is fine).
 - For a fresh test, register a new sub-ID or reuse one already in 2-of-2 + null state.
 
 For both flavors:

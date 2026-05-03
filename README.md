@@ -10,7 +10,7 @@ Two private parties enter a binding loan agreement on chain, with cryptographic 
 
 ## In one paragraph
 
-VerusLending is a credit primitive built from existing Verus features: 2-of-2 multisig identities, atomic raw transactions, and pre-signed time-locked transactions using SIGHASH_ANYONECANPAY. At origination, both parties cooperatively create a Loan-ID holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Lender stonewalling is structurally impossible. Subjective disputes go to real-world courts with the chain record as admissible evidence.
+VerusLending is a credit primitive built from existing Verus features: 2-of-2 multisig identities, atomic raw transactions, and pre-signed time-locked transactions using SIGHASH_ANYONECANPAY. At origination, both parties cooperatively create a vault holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Lender stonewalling is structurally impossible. Subjective disputes go to real-world courts with the chain record as admissible evidence.
 
 ## What's here
 
@@ -25,8 +25,8 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 
 | Mechanism | Status |
 |---|---|
-| Loan-ID structure — VerusID flavor (2-of-2 multisig, null revoke/recover) | ✅ validated |
-| **Loan-ID — pure p2sh flavor (no VerusID needed)** | ✅ validated |
+| vault structure — VerusID flavor (2-of-2 multisig, null revoke/recover) | ✅ validated |
+| **vault — pure p2sh flavor (no VerusID needed)** | ✅ validated |
 | Atomic origination (raw multi-party tx) | ✅ validated |
 | **Cross-currency origination + repayment (e.g. VRSC collateral + DAI principal)** | ✅ validated |
 | **Pre-signed Tx-Repay (SIGHASH_SINGLE\|ANYONECANPAY)** — canonical | ✅ validated |
@@ -72,7 +72,7 @@ The protocol is intentionally minimal:
 
 ```
 Origination ceremony (one-time, cooperative):
-  Tx-A:       atomic origination — collateral → Loan-ID, principal → borrower
+  Tx-A:       atomic origination — collateral → vault, principal → borrower
   Tx-Repay:   pre-signed atomic repayment template (SIGHASH_ANYONECANPAY)
               Held privately by borrower
               Borrower can broadcast unilaterally any time before maturity
@@ -81,7 +81,7 @@ Origination ceremony (one-time, cooperative):
   Tx-C:       (optional) pre-signed borrower's last-resort rescue
               nLockTime = maturity + 1 year; rare fallback
 
-Loan-ID:
+vault:
   primary: 2-of-2 [borrower, lender]
   revocation: null
   recovery: null
@@ -111,7 +111,7 @@ This protocol is a **peer-to-peer fixed-term primitive**. It's complementary to 
 
 - **Basket-based pool lending** (a future Verus direction): currency baskets become lending pools with dynamic interest rates based on collateral/loan ratios; LPs earn fees by holding basket tokens; margin call enforcement via import rollup or validator-incentivized redemption. Best fit for retail / anonymous / market-rate lending. Different model from VerusLending — different use case.
 
-- **Template outputs** (a future Verus feature): non-spending outputs that act as cross-tx constraints requiring a matching companion output with specified fields. When this lands, it would simplify some of the patterns we currently express via SIGHASH manipulation, and could enable cleaner Loan-ID-makes-offer designs that solve the empty-Pay-ID problem we encountered during testing.
+- **Template outputs** (a future Verus feature): non-spending outputs that act as cross-tx constraints requiring a matching companion output with specified fields. When this lands, it would simplify some of the patterns we currently express via SIGHASH manipulation, and could enable cleaner vault-makes-offer designs that solve the empty-Pay-ID problem we encountered during testing.
 
 VerusLending serves the use case where two known parties want to enter a private, fixed-term, fixed-rate loan with cryptographic atomic settlement. Mike's basket-based lending vision serves the use case where anyone wants to borrow at market rates from a pooled liquidity source. Both should exist.
 
