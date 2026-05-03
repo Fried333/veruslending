@@ -1,34 +1,68 @@
-# VerusLending — Protocol Specification
+# VerusLending — Protocol Specification v1.0
 
-**Status:** Draft v0.5 — empirically validated on Verus mainnet (33 distinct test scenarios — full lending lifecycle, options market, generic p2p atomic swap, i-address recipient, double-spend rejection in both directions, non-VRSC collateral, **marketplace data layer**)
+**Status:** Chain-level mechanics fully validated on Verus mainnet (33 test scenarios — see [TESTING.md](./TESTING.md) for txids). Reference wallet implementation is v1.x roadmap, outside the spec.
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
-A peer-to-peer collateralized credit protocol built from existing Verus signature primitives. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all four lifecycle phases — origination, repayment, default, rescue — all using the same `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` pre-commitment pattern. No arbiter. No committee. No third-party intermediary. No panic button. The lender pre-commits at offer time and cannot retract; the borrower can settle unilaterally at any time during the loan term.
-
-**Terminology note:** This spec uses "vault" as the generic term for the address that holds collateral. Two equivalent vault flavors are supported (§2). VerusIDs are *optional* infrastructure — the protocol works without them.
+A peer-to-peer collateralized credit protocol composed entirely from existing Verus primitives. No new opcodes, no consensus changes, no protocol token. The full lifecycle — discovery, ceremony coordination, origination, settlement, default, rescue, reputation tracking — runs on chain via a small set of pre-signed transactions plus VerusID contentmultimap as the data layer. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all phases.
 
 ---
 
-## 0. Goals and non-goals
+## Table of contents
+
+**Part I — Cryptographic protocol**
+1. [Goals and non-goals](#1-goals-and-non-goals)
+2. [Roles and identity model](#2-roles-and-identity-model)
+3. [The vault](#3-the-vault)
+4. [Pre-signed transactions](#4-pre-signed-transactions)
+5. [Origination ceremony](#5-origination-ceremony)
+6. [Settlement, default, rescue](#6-settlement-default-rescue)
+7. [Reorg handling](#7-reorg-handling)
+8. [Edge case coverage matrix](#8-edge-case-coverage-matrix)
+
+**Part II — Data layer**
+9. [Marketplace via contentmultimap](#9-marketplace-via-contentmultimap)
+10. [Reputation and credit history](#10-reputation-and-credit-history)
+11. [Encrypted coordination](#11-encrypted-coordination)
+12. [VDXF schema registry](#12-vdxf-schema-registry)
+
+**Part III — Implementation guidance**
+13. [Wallet UX requirements](#13-wallet-ux-requirements)
+14. [Profile choice in practice](#14-profile-choice-in-practice)
+15. [Sybil defenses](#15-sybil-defenses)
+
+**Part IV — Reference**
+16. [Validated primitives](#16-validated-primitives)
+17. [Limitations and known issues](#17-limitations-and-known-issues)
+18. [Future work / roadmap](#18-future-work--roadmap)
+
+**Appendices**
+- [A. Glossary](#appendix-a-glossary)
+- [B. Shielded variants](#appendix-b-shielded-variants)
+- [C. The primitive's other applications](#appendix-c-the-primitives-other-applications)
+
+---
+
+# Part I — Cryptographic protocol
+
+## 1. Goals and non-goals
 
 ### Goals
 
 - Two-party atomic origination with optional async UX
-- Atomic repayment with cryptographic settlement guarantee
-- Lender pre-commitment at every phase (cannot stonewall mid-flow)
-- Borrower's unilateral repayment power (no live cooperation needed at settlement)
+- Atomic settlement with cryptographic guarantee
+- Lender pre-commits at every phase (cannot stonewall mid-flow)
+- Borrower repays unilaterally (no live cooperation needed at settlement)
 - Time-based default with no live cooperation required
 - Reorg-safe by construction (pre-signed txs don't depend on chain state)
 - Survives single-party key loss (rescue path)
+- Marketplace, reputation, and ceremony all on chain (no off-chain server required)
 - Works with existing Verus primitives — no new RPCs or consensus rules
-- No mutual-deadlock state ever exists
 
 ### Non-goals
 
 - On-chain dispute resolution for subjective claims (use real-world courts; the chain is admissible evidence)
 - Margin calls / continuous LTV monitoring (this is non-margin lending, by design)
-- Anonymous-stranger lending without external trust (requires reputation/legal infrastructure not in scope)
 - Cross-chain BTC collateral (separate workstream — Verus Swap atomic swaps)
 - Multi-party / syndicated loans
 - Loan secondary market (transferable loan positions)
@@ -37,97 +71,110 @@ A peer-to-peer collateralized credit protocol built from existing Verus signatur
 
 ---
 
-## 1. Roles
+## 2. Roles and identity model
 
 | Role | Description |
 |---|---|
 | **Borrower** | Party providing collateral, receiving principal, obligated to repay principal + interest by maturity. |
 | **Lender** | Party providing principal, holding rights to claim collateral on default. |
 
-Both are private parties. They identify each other off-chain — the protocol does not provide discovery or matchmaking. Each uses a Verus R-address (Profile L) or VerusID-controlled R-address (Profile V) for sending/receiving funds.
+### Identity is in two layers — vault and parties
+
+The protocol has two independent identity choices:
+
+1. **The vault** — the address holding collateral. Can be a 2-of-2 p2sh script hash (Profile L, no VerusID) or a 2-of-2 VerusID i-address (Profile V, with naming + multimap).
+2. **The parties** — the borrower and lender as actors. Can be plain R-addresses (anonymous) or VerusIDs (with reputation/credit-identity layer).
+
+These are independent. The recommended configuration for an active lending market is **p2sh vault + party VerusIDs**: cheapest possible vault (zero registration cost), full reputation/multimap features for the parties (see Part II).
 
 ---
 
-## 2. The vault
+## 3. The vault
 
-The **vault** is the address that holds the collateral until one of four pre-signed transactions releases it. Two equivalent flavors:
+The vault is a 2-of-2 multisig address that holds the collateral until one of the pre-signed transactions releases it.
 
-### 2.1 Profile L (lite, p2sh) — minimal-overhead
+### 3.1 Profile L — p2sh (lite)
 
-The vault is a 2-of-2 p2sh script hash derived deterministically from both parties' compressed public keys:
+A plain Bitcoin-compatible 2-of-2 p2sh script hash:
 
 ```
 redeem_script = OP_2 <borrower_pubkey> <lender_pubkey> OP_2 OP_CHECKMULTISIG
 vault_address = base58(0x55 || ripemd160(sha256(redeem_script)) || checksum)
 ```
 
-The vault address has a `b` prefix on Verus mainnet (e.g. `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne`). No on-chain registration step. No fee. No name. Both parties exchange pubkeys, derive the address deterministically, proceed.
+The vault address has a `b` prefix on Verus mainnet (e.g. `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne`). No on-chain registration. No fee. No name. Both parties exchange pubkeys, derive the address deterministically, proceed.
 
-Validated on mainnet — see TESTING.md §18-§25.
+**Constraints:** Profile L vaults can hold **VRSC only**. Reserve-currency cryptocondition outputs (DAI, tBTC, basket tokens) to a plain p2sh script hash are non-standard and rejected by the chain. For non-VRSC collateral, use Profile V.
 
-**Use Profile L when:** the parties already know each other off-chain, the loan is one-off, neither party has (or wants to acquire) a VerusID, no on-chain naming or reputation tracking is desired.
+Validated mainnet: §18-§30, see TESTING.md.
 
-### 2.2 Profile V (verusid) — richer UX
+### 3.2 Profile V — VerusID (with multimap)
 
-The vault is a Verus sub-identity with these properties:
+A Verus sub-identity with these properties:
 
 ```
-vault (VerusID)
+vault VerusID
   primary:             [borrower_R, lender_R]   M = 2 (2-of-2 multisig)
   revocationauthority: null (or burn address)
   recoveryauthority:   null (or burn address)
-  contentmultimap:     loan terms object        (principal, rate, maturity, parties)
+  contentmultimap:     loan terms object        (optional)
   timelock:            0
 ```
 
 Vault address is the VerusID's i-address (e.g. `i7b7Tq8JYXX9iqS7FBevC6LaG3ioh8z3RM`). Cost: sub-ID registration fee (~0.1 VRSC if a parent identity already exists) or 100 VRSC for a fresh top-level identity.
 
-Profile V buys you:
+**Profile V buys:**
 - Human-readable name (`loan-XXXX.parent@`)
-- On-chain encrypted multimap entries (e.g. for hex-backup of pre-signed transactions)
-- Reputation hooks for repeat counterparties
-
-Validated on mainnet — see TESTING.md §16, §17.
+- On-chain encrypted multimap entries on the loan itself
+- Support for non-VRSC collateral (validated §32)
+- Reputation hooks tied to the loan id
 
 **Authority semantics (Profile V only):**
+- **Primary (2-of-2)**: both parties must cosign any normal `updateidentity` action
+- **Revocation**: null — no party can unilaterally freeze the loan
+- **Recovery**: null — no discretionary recovery path
 
-- **Primary (2-of-2)**: Both parties must cosign any normal `updateidentity` action. Neither can spend or update unilaterally.
-- **Revocation**: null. No party can unilaterally freeze the loan. The protocol provides no panic-button mechanism — and doesn't need one, because the lender cannot stonewall.
-- **Recovery**: null. No discretionary recovery path. The vault's collateral can only leave the i-address via one of the four pre-signed transactions in §3.
+For Profile L the equivalent semantics are inherent to p2sh: no concept of revoke/recover; funds release only on 2-of-2 sig.
 
-For Profile L the equivalent semantics are inherent to p2sh: the script has no concept of revoke/recover. Funds release only on 2-of-2 sig.
+Validated mainnet: §16, §17, §32 (with non-VRSC collateral).
 
-### 2.3 Choosing a profile
+### 3.3 Choosing a vault profile
 
 | Use case | Recommended profile |
 |---|---|
-| Ad-hoc loan between known parties | L |
-| Lending desk doing many loans (shared parent ID for vaults) | V |
-| Community lending facility issuing vault-IDs as a service | V |
-| Minimal overhead, zero on-chain registration | L |
+| Ad-hoc loan, VRSC collateral, both parties already know each other | L |
+| Any non-VRSC collateral | V |
+| Lending desk with shared parent ID (`loan-XXX.desk@`) | V |
+| Community lending facility issuing branded loans | V |
+| Minimal overhead, parties don't want to register anything | L |
 
-The protocol's cryptographic guarantees are identical between profiles. The choice is operational — naming, fees, ID infrastructure — not security.
+The protocol's cryptographic guarantees are identical between profiles. The choice is operational — naming, fees, currency support, ID infrastructure — not security.
 
-### 2.4 Vault identity is independent from party identity
+### 3.4 Currency support
 
-A common point of confusion: **the vault's profile (L vs V) is independent from whether the borrower and lender themselves use VerusIDs.**
+**Principal, interest, repayment, and (for Profile V) collateral** can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, DAI.vETH, tBTC.vETH, vUSDC), or PBaaS chain currencies.
 
-The reputation/credit-identity layer (§13) lives on the *parties'* personal VerusIDs, not on the vault. Encrypted multimap hex backup (§13.1) lives on each party's own VerusID, not on the vault. So:
+Validated cross-currency configurations (§18-§32):
+- VRSC collateral + VRSC principal (§16, §17)
+- VRSC collateral + DAI principal/interest (§18, §20)
+- VRSC collateral + DAI principal, broadcaster-pays-fee variants (§20, §21)
+- DAI collateral + VRSC strike on Profile V (§32)
 
-| Vault | Borrower's identity | Lender's identity | What you get |
-|---|---|---|---|
-| p2sh (L) | R-address | R-address | Cheapest. Fully anonymous. No reputation. |
-| p2sh (L) | VerusID | VerusID | **Recommended** — cheap vault + reputation/multimap features for both parties |
-| VerusID (V) | VerusID | VerusID | Maximum on-chain context (loan also has its own multimap entries) |
-| VerusID (V) | R-address | R-address | Possible but unusual — ID adds little if neither party has one |
+**Tooling note** (per §32): when signing cryptocondition reserve-transfer inputs, `signrawtransaction` requires the wallet key-lookup path:
 
-**The recommended default for an active lending market is p2sh vault + party VerusIDs.** This combines zero per-loan registration cost with full reputation tracking and encrypted hex backup. The vault doesn't *need* to be a VerusID for any of those features to work — they live on the parties' identities.
+```
+# Correct for cryptocondition reserve inputs
+verus signrawtransaction <hex> null null "SINGLE|ANYONECANPAY"
 
-Profile V vaults are only the right choice when the loan itself benefits from being a named, on-chain-discoverable entity (lending desks issuing branded loans, community lending facilities, syndicated loans where multiple parties need to query the loan state).
+# Fails with "Opcode missing or not understood" on reserve cryptoconditions
+verus signrawtransaction <hex> [] ["<priv>"] "SINGLE|ANYONECANPAY"
+```
+
+Wallets implementing the protocol must use the `null null` form when the input is a non-VRSC cryptocondition. For VRSC-only inputs (p2sh or i-address with VRSC value), either path works.
 
 ---
 
-## 3. Pre-signed transactions
+## 4. Pre-signed transactions
 
 The protocol has four pre-signed transaction templates. **All four use the same signature discipline:** Input 0 is signed with `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY`, locking Output 0 to the agreed payment, leaving the rest of the transaction extensible by the broadcaster.
 
@@ -138,220 +185,218 @@ The protocol has four pre-signed transaction templates. **All four use the same 
 | Tx-B | Default | Lender | After maturity + grace | Collateral → lender |
 | Tx-C | Rescue | Borrower | After far-future lockout | Collateral → borrower |
 
-This is fully symmetric. A wallet implementing one phase implements all four with minor variations.
+This is fully symmetric: a wallet implementing one phase implements all four with minor variations.
 
-### 3.1 Tx-O — origination as atomic swap (recommended)
+### 4.1 Tx-O — atomic-swap origination (recommended)
 
-Pre-signed by the lender at offer time. Borrower triggers the broadcast unilaterally when ready.
+Pre-signed by the lender at offer time. Borrower triggers broadcast unilaterally when ready.
 
 ```
 Lender pre-signs:
-  Input 0:  Lender's principal UTXO          (signed SIGHASH_SINGLE | ANYONECANPAY)
-  Output 0: principal_amount → borrower's R   (sig-locked, paired with Input 0 by index)
+  Input 0:  Lender's principal UTXO    (signed SIGHASH_SINGLE|ANYONECANPAY)
+  Output 0: principal_amount → borrower (sig-locked, paired)
 
 Borrower extends and signs at takeup:
-  Input 1:  Borrower's collateral UTXO        (signed SIGHASH_ALL)
-  Output 1: collateral_amount → vault         (the loan begins here)
-  Output 2: borrower's change                 (if any)
-  Output 3: lender's change                   (if needed)
+  Input 1:  Borrower's collateral UTXO  (signed SIGHASH_ALL)
+  Output 1: collateral_amount → vault   (loan begins here)
+  Output 2: borrower's change           (if any)
+  Output 3: lender's change             (if any)
 ```
 
 **Properties:**
-- Lender pre-commits irreversibly at offer time. Once Borrower has the hex, Lender cannot retract — except by spending Input 0 elsewhere (which invalidates the offer cleanly).
+- Lender pre-commits irreversibly. Once Borrower has the hex, Lender cannot retract — except by spending Input 0 elsewhere (which invalidates the offer cleanly).
 - Borrower owns the broadcast moment. Suitable for offer boards, async UX, marketplace listings.
 - A reorg of an unconfirmed Tx-O simply voids the loan: both parties' funds return to source addresses; rebroadcast or abandon.
 
-Validated on mainnet — see TESTING.md §25.
+Validated mainnet: §25.
 
-### 3.2 Tx-A — origination as cooperative raw tx (alternative)
+### 4.2 Tx-A — cooperative raw tx origination (alternative)
 
-For scenarios where both parties are online together and want a single multi-party signed tx:
+For scenarios where both parties are online together:
 
 ```
-Inputs:
-  - Borrower's UTXO covering collateral + share of fee
-  - Lender's UTXO covering principal + share of fee
-
-Outputs:
-  - vault address ← collateral amount
-  - Borrower's R-address ← principal amount
-  - (change outputs as needed)
+Inputs:  borrower's collateral UTXO + lender's principal UTXO (+ change/fee)
+Outputs: collateral → vault, principal → borrower, change(s)
 ```
 
-Both parties sign their respective inputs via standard `signrawtransaction`. No SIGHASH_SINGLE involved — purely additive cosigning. Validated on mainnet §16, §18.
+Both parties sign their respective inputs via standard `signrawtransaction`. No SIGHASH_SINGLE involved — purely additive cosigning.
 
-Tx-A and Tx-O produce identical post-confirmation state. Choose Tx-A for synchronous ceremony, Tx-O for async.
+Validated mainnet: §16, §18.
 
-### 3.3 Tx-Repay — pre-signed repayment (canonical)
-
-The canonical settlement mechanism. Pre-signed at origination by both parties.
+### 4.3 Tx-Repay — pre-signed repayment (canonical)
 
 ```
 Template (signed at origination):
-  Input 0: vault's collateral UTXO            (signed SIGHASH_SINGLE | ANYONECANPAY by both via redeem script)
-  Output 0: principal + interest → lender     (sig-locked, paired with Input 0)
-  expiryheight: maturity_block                (cannot broadcast after default deadline)
+  Input 0:       vault collateral UTXO     (signed SIGHASH_SINGLE|ANYONECANPAY by both, via redeem script)
+  Output 0:      principal+interest → lender (sig-locked, paired)
+  expiryheight:  maturity_block            (cannot broadcast after deadline)
 
 Borrower extends at repayment:
-  Input 1+:  funding UTXOs (principal+interest currency, plus VRSC for fee)
-                                              (signed SIGHASH_ALL)
-  Output 1+: collateral return + change       (borrower structures freely)
+  Input 1+:  funding UTXOs (principal+interest currency, plus VRSC for fee)  (signed SIGHASH_ALL)
+  Output 1+: collateral return + change    (borrower structures freely)
 ```
 
-The borrower can repay unilaterally. The lender does not need to be online or sign anything at repayment time. Validated on mainnet §16, §18, §20.
+Borrower repays unilaterally. Lender doesn't need to be online or sign anything at repayment. Validated mainnet: §16, §18, §20.
 
 **Two fee-model variants:**
 
-- **R-α (collateral-pays-fee):** Output 1 = `collateral - fee` to borrower. Simple but eats slightly into the recovered amount.
-- **R-β (broadcaster-pays-fee, recommended):** Borrower attaches a separate VRSC input for fee, gets full collateral back. Required if collateral is non-VRSC (no VRSC in the collateral UTXO to deduct from). Validated §20.
+- **R-α (collateral-pays-fee):** Output 1 = `collateral - fee` to borrower. Simple but eats slightly into recovered amount.
+- **R-β (broadcaster-pays-fee, recommended):** Borrower attaches a separate VRSC input for fee, gets full collateral back. Required if collateral is non-VRSC. Validated §20.
 
-### 3.4 Tx-B — pre-signed default-claim
-
-Lender's recourse if the borrower doesn't repay before maturity.
+### 4.4 Tx-B — pre-signed default-claim
 
 ```
 Template (signed at origination):
-  Input 0: vault's collateral UTXO            (signed SIGHASH_SINGLE | ANYONECANPAY by both)
-  Output 0: collateral → lender               (sig-locked)
-  nLockTime: maturity_block + grace_period    (e.g. +30 days)
+  Input 0:       vault collateral UTXO     (signed SIGHASH_SINGLE|ANYONECANPAY by both)
+  Output 0:      collateral → lender       (sig-locked)
+  nLockTime:     maturity_block + grace_period
 
 Lender extends at default-claim:
-  Input 1:  lender's VRSC fee UTXO            (signed SIGHASH_ALL)
-  Output 1: lender's change                   (after fee deducted from Input 1)
+  Input 1:       VRSC fee UTXO             (signed SIGHASH_ALL)
+  Output 1:      lender's change           (after fee deducted)
 ```
 
-Cannot be broadcast before nLockTime. After broadcast, the vault's collateral UTXO is consumed; Tx-Repay and Tx-C are invalidated. Validated on mainnet §17, §19, §21.
+Cannot be broadcast before nLockTime. After broadcast, the vault UTXO is consumed; Tx-Repay and Tx-C are invalidated. Validated mainnet: §17, §19, §21.
 
-**Note:** Earlier drafts (v0.4) used `SIGHASH_ALL` for Tx-B with collateral-pays-fee. v0.5 standardizes on `SIGHASH_SINGLE | ANYONECANPAY` for full symmetry with Tx-Repay and Tx-O. Both work; the v0.5 form gives the lender broadcaster-pays-fee flexibility and matches the protocol's other phases.
+### 4.5 Tx-C — pre-signed rescue (optional)
 
-### 3.5 Tx-C — pre-signed rescue
-
-Borrower's last-resort path. Activates only if neither Tx-Repay nor Tx-B is broadcast — i.e., both parties have effectively abandoned the loan.
+Borrower's last-resort path. Activates if neither Tx-Repay nor Tx-B is broadcast — i.e., both parties have effectively abandoned the loan.
 
 ```
 Template (signed at origination):
-  Input 0: vault's collateral UTXO            (signed SIGHASH_SINGLE | ANYONECANPAY by both)
-  Output 0: collateral → borrower             (sig-locked)
-  nLockTime: maturity_block + extended_lockout (e.g. +1 year)
+  Input 0:       vault collateral UTXO     (signed SIGHASH_SINGLE|ANYONECANPAY by both)
+  Output 0:      collateral → borrower     (sig-locked)
+  nLockTime:     maturity_block + extended_lockout (e.g., +1 year)
 
 Borrower extends at rescue:
-  Input 1:  borrower's VRSC fee UTXO          (signed SIGHASH_ALL)
-  Output 1: borrower's change
+  Input 1:       VRSC fee UTXO             (signed SIGHASH_ALL)
+  Output 1:      borrower's change
 ```
 
-Rare. Some implementations may omit Tx-C entirely. With proper backup of Tx-Repay, the borrower's normal recovery path is to repay before maturity, not to rescue. Validated on mainnet §23.
+Rare. Some implementations may omit Tx-C. Validated mainnet: §23.
+
+### 4.6 Signing operations summary
+
+| Phase | Lender signs | Borrower signs |
+|---|---|---|
+| Tx-O pre-sign | 1× SIGHASH_SINGLE\|ANYONECANPAY (Input 0, his contribution) | — |
+| Tx-Repay pre-sign | 1× SIGHASH_SINGLE\|ANYONECANPAY (Input 0, multisig) | 1× SIGHASH_SINGLE\|ANYONECANPAY (Input 0, multisig) |
+| Tx-B pre-sign | 1× SIGHASH_SINGLE\|ANYONECANPAY | 1× SIGHASH_SINGLE\|ANYONECANPAY |
+| Tx-C pre-sign (optional) | 1× SIGHASH_SINGLE\|ANYONECANPAY | 1× SIGHASH_SINGLE\|ANYONECANPAY |
+| Tx-O broadcast (extension) | — | 1× SIGHASH_ALL (collateral input) |
+| Tx-Repay broadcast | — | 1× SIGHASH_ALL (strike + fee inputs) |
+| Tx-B broadcast | 1× SIGHASH_ALL (fee input) | — |
+| Tx-C broadcast | — | 1× SIGHASH_ALL (fee input) |
+
+About 4-7 signing operations per side per loan, all using existing wallet primitives.
 
 ---
 
-## 4. Origination ceremony
+## 5. Origination ceremony
 
-The signing order is critical. **All settlement transactions (Tx-Repay, Tx-B, Tx-C) must be fully signed before the origination tx (Tx-O or Tx-A) is broadcast.**
+The signing order is critical. **All settlement transactions (Tx-Repay, Tx-B, Tx-C) must be fully signed before Tx-O is broadcast.**
 
 ```
 Step 1: Both parties exchange compressed pubkeys (Profile L)
-        OR register the vault VerusID with 2-of-2 [borrower, lender] (Profile V)
+        OR register the vault VerusID with 2-of-2 + null revoke/recover (Profile V)
 
-Step 2: Construct unsigned Tx-O (or Tx-A)
+Step 2: Construct unsigned Tx-O
         - Determine all inputs and outputs
         - Compute predicted txid (deterministic ECDSA via RFC 6979 makes this stable)
 
-Step 3: Construct and sign Tx-Repay TEMPLATE
+Step 3: Construct and pre-sign Tx-Repay
         - Input 0 references predicted_txid:vault_vout
         - Output 0 = principal + interest to lender
         - expiryheight = maturity_block
-        - Both parties sign Input 0 with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
-        - Borrower stores resulting hex
+        - Both parties sign Input 0 with SIGHASH_SINGLE|ANYONECANPAY
+        - Borrower stores resulting hex (encrypted in own multimap, Profile V)
 
-Step 4: Construct and sign Tx-B TEMPLATE
+Step 4: Construct and pre-sign Tx-B
         - Input 0 references same predicted_txid:vault_vout
         - Output 0 = collateral to lender
         - nLockTime = maturity_block + grace
-        - Both parties sign Input 0 with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
+        - Both sign with SIGHASH_SINGLE|ANYONECANPAY
         - Lender stores resulting hex
 
-Step 5: (Optional) Construct and sign Tx-C TEMPLATE
-        - Input 0 references same predicted_txid:vault_vout
+Step 5: (Optional) Pre-sign Tx-C
+        - Input 0 references same vault UTXO
         - Output 0 = collateral to borrower
         - nLockTime = maturity_block + extended_lockout
-        - Both parties sign Input 0 with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
+        - Both sign with SIGHASH_SINGLE|ANYONECANPAY
         - Borrower stores resulting hex
 
-Step 6: Both parties verify Tx-Repay/Tx-B/Tx-C are stored on the appropriate side
-        Tx-O: Lender signs Input 0 with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY,
-              borrower stores hex; borrower broadcasts when ready
-        Tx-A: Both parties sign their inputs and broadcast immediately
+Step 6: Verify, then broadcast Tx-O
+        - Both parties verify all settlement templates are stored on the appropriate side
+        - Lender signs Input 0 with SIGHASH_SINGLE|ANYONECANPAY (his offer hex)
+        - Borrower extends with collateral input + outputs, signs with SIGHASH_ALL
+        - Borrower broadcasts when ready
 ```
 
 If the ceremony aborts before step 6, no on-chain state is created. No funds are at risk.
 
 ### Predicting the vault-funding txid
 
-Pre-signing settlement txs requires knowing Tx-O/Tx-A's txid before broadcast. With deterministic ECDSA (RFC 6979) the txid is stable from the unsigned form. Wallets compute the predicted txid and use it in Step 3-5. If the actual txid differs (rare; signature variation), abort and restart.
+Pre-signing settlement templates requires knowing Tx-O's txid before broadcast. With deterministic ECDSA (RFC 6979) the txid is stable from the unsigned form. Wallets compute the predicted txid; if the actual txid differs (rare; signature variation), abort and restart.
 
 ---
 
-## 5. Repayment flow (canonical)
+## 6. Settlement, default, rescue
 
-The borrower can repay unilaterally at any time before Tx-Repay's `expiryheight` is reached. **No live cooperation from the lender is needed.**
+### 6.1 Repayment (canonical)
+
+The borrower repays unilaterally at any time before Tx-Repay's `expiryheight`. **No live cooperation from the lender is needed.**
 
 ```
 Day N (any day during loan term, before maturity):
-  Borrower's wallet retrieves Tx-Repay template from storage
+  Borrower's wallet retrieves Tx-Repay template
   Wallet selects UTXO(s) totaling at least (principal + interest + fee_budget)
   Wallet appends those UTXOs as new inputs
-  Wallet appends Output 1+ for collateral return + change → borrower
-  Wallet signs the new inputs with SIGHASH_ALL
+  Wallet appends Output 1+ for collateral return + change
+  Wallet signs new inputs with SIGHASH_ALL
   Wallet broadcasts the now-complete tx
 ```
 
-Result on confirmation:
-- Lender's R-address receives principal + interest (Output 0, signed-locked at origination)
-- Borrower's R-address receives collateral + change
-- Vault's collateral UTXO is consumed; Tx-B and Tx-C are now invalidated
-- Lender did not sign anything at repayment time
+On confirmation:
+- Lender's address receives principal + interest (Output 0, signed-locked at origination)
+- Borrower's address receives collateral + change
+- Vault UTXO is consumed; Tx-B and Tx-C are now invalidated
+- Lender did not sign anything at repayment
 
-### Why the lender cannot refuse
+### 6.2 Why the lender cannot refuse
 
-The lender's signature on Input 0 was made at origination. The signature is hex bytes in the borrower's wallet. There is no mechanism by which the lender can retract or revoke that signature. Once the borrower broadcasts the complete tx, settlement is automatic.
+The lender's signature on Input 0 was made at origination. The signature is hex bytes in the borrower's wallet. There is no mechanism by which the lender can retract or revoke that signature. Once the borrower broadcasts, settlement is automatic.
 
-The lender can:
-- Be online or offline at repayment time — irrelevant
-- Be alive, dead, or unresponsive — irrelevant
-- Want or not want the repayment — irrelevant
+The lender can be online or offline, alive or dead, willing or unwilling — irrelevant. The signature is final.
 
-The mathematics has been done. The signature is final.
+### 6.3 Why no third party can front-run
 
-### Why no third party can front-run
+The Tx-Repay template is private — held only by the borrower, never on the public chain until broadcast. There is no offer in mempool that strangers could see and race against.
 
-The Tx-Repay template is private — held only by the borrower in their wallet, never on the public chain until broadcast. There is no offer in mempool that strangers could see and race against.
+When the borrower broadcasts, they submit a complete, fully-signed transaction. It either confirms in one block or doesn't. There is no intermediate state for interception.
 
-When the borrower broadcasts, they submit a complete, fully-signed transaction directly to the network. It either confirms in one block or doesn't. There is no intermediate state where a stranger could intercept.
+The signed-paired output (Output 0) cannot be redirected or reduced — empirically validated under tampering attempts in §24 (D1, D2): both rejected with `mandatory-script-verify-flag-failed`.
 
-The signed-paired output (Output 0) cannot be redirected — it specifies the lender's address exactly, and the lender's signature commits to that exact output via SIGHASH_SINGLE pairing. A stranger cannot modify it. **This is empirically validated in TESTING.md §24** (D1, D2 tampering rejected).
-
----
-
-## 6. Default, rescue, and reorg flows
-
-### 6.1 Normal default (borrower fails to repay)
+### 6.4 Default (lender claims)
 
 ```
-Day 0 to maturity: borrower never broadcasts Tx-Repay
-Day maturity + grace: Tx-B's nLockTime is reached
-Lender extends Tx-B with own VRSC fee input + change output
-Lender broadcasts; collateral lands at lender's R-address
-Tx-Repay and Tx-C now invalidated
+Day 0 to maturity:        borrower never broadcasts Tx-Repay
+Day maturity + grace:     Tx-B's nLockTime is reached
+Lender extends Tx-B:      attaches own VRSC fee input + change output
+Lender broadcasts:        collateral lands at lender's address
+                          Tx-Repay and Tx-C now invalidated
 ```
 
-### 6.2 Borrower disappears / loses keys
+Validated mainnet: §17, §19, §21.
 
-Same as 6.1 — lender broadcasts Tx-B at maturity + grace. Borrower's heirs lose collateral but kept the principal received at origination.
+### 6.5 Borrower disappears / loses keys before maturity
 
-### 6.3 Lender disappears / loses keys
+Same as 6.4 — lender broadcasts Tx-B at maturity + grace. Borrower's heirs lose collateral but kept the principal received at origination.
 
-Borrower broadcasts Tx-Repay normally. Lender's pre-signature is in the template — the broadcast doesn't require lender to be alive or available. Settlement happens unilaterally. The repayment lands at the lender's R-address; the lender's heirs inherit it via standard wallet succession.
+### 6.6 Lender disappears / loses keys before borrower repays
 
-### 6.4 Lender's keys compromised post-origination
+Borrower broadcasts Tx-Repay normally. Lender's pre-signature is in the template — broadcast doesn't require the lender to be alive. Settlement happens unilaterally. The repayment lands at the lender's address; the lender's heirs inherit it via standard wallet succession.
+
+### 6.7 Lender's keys compromised post-origination
 
 If an attacker gains the lender's private key after origination but before maturity:
 
@@ -359,17 +404,21 @@ If an attacker gains the lender's private key after origination but before matur
 - Borrower's defense: broadcast Tx-Repay before then, atomically settling and invalidating Tx-B
 - This is a race against the maturity block, not contention over the same UTXO
 
-In practice, the borrower has the entire loan term to detect compromise (lender announces, public alerts) and repay early. The attacker cannot accelerate Tx-B's nLockTime; they must wait for maturity + grace like anyone else.
+The attacker cannot accelerate Tx-B's nLockTime; they must wait for maturity + grace. In practice, the borrower has the entire loan term to detect compromise and repay early.
 
-If the borrower lacks funds to repay early, this becomes a forced default on the borrower's terms. The protocol cannot defend against the lender's own key compromise — that's user-side OPSEC.
+### 6.8 Both parties die / lose keys
 
-### 6.5 Both parties die / lose keys
+Funds locked on chain. Heirs may eventually find the off-chain pre-signed transactions and broadcast them. If Tx-C exists, after its far-future locktime either party (or their heirs) can broadcast it to recover collateral to the borrower's address. If neither hex survives and Tx-C wasn't pre-signed, collateral is permanently inaccessible.
 
-Funds locked on chain. Heirs may eventually find the off-chain pre-signed transactions and broadcast them. If not, collateral is permanently inaccessible. Acceptable trade-off — the protocol is not responsible for inheritance.
+### 6.9 Rescue (Tx-C)
 
-If Tx-C exists, after its far-future locktime either party (or their heirs) can broadcast it to recover collateral to the borrower's address. Lender's heirs would need cooperation from borrower to receive a refund of any unsettled principal.
+Borrower's last-resort path. Activates only if neither Tx-Repay nor Tx-B is broadcast — i.e., both parties have effectively abandoned. After Tx-C's far-future nLockTime, borrower extends with fee input and broadcasts. Collateral returns to borrower.
 
-### 6.6 Chain reorganizations
+Validated mainnet: §23.
+
+---
+
+## 7. Reorg handling
 
 The protocol is **inherently reorg-resilient** because pre-signed transactions don't depend on chain state for their validity (only on UTXO availability and locktime). A reorg simply means "rebroadcast and try again." There is no scenario where a reorg can cause a party to lose value.
 
@@ -380,7 +429,7 @@ The protocol is **inherently reorg-resilient** because pre-signed transactions d
 | Tx-B reorged after broadcast | Lender's wallet rebroadcasts; tx still valid (locktime satisfied) | None — borrower can't broadcast Tx-Repay across maturity if expiryheight set correctly |
 | Tx-C reorged after broadcast | Borrower's wallet rebroadcasts; far-future locktime makes contention implausible | None |
 
-**Lender's default-claim procedure:**
+**Lender's default-claim procedure (recommended):**
 
 ```
 1. At maturity + grace, broadcast Tx-B
@@ -393,146 +442,336 @@ The protocol is **inherently reorg-resilient** because pre-signed transactions d
 
 If Tx-B confirms in block N and gets reorged out, the only competing settlement would be Tx-Repay. But Tx-Repay's `expiryheight = maturity_block` makes it invalid at any height ≥ maturity. So the borrower can't "race" Tx-Repay during the reorg window — the network rejects it as expired.
 
-The only adversarial reorg the protocol can't defend against is a deep (>10-block) reorg that simultaneously affects both Tx-B and the chain's notion of "what's the maturity block." On Verus, with ~1-min blocks and notarization, this is implausible. For high-stakes loans, lender simply waits longer (e.g. 100 confirmations).
+The only adversarial reorg the protocol can't defend against is a deep (>10-block) reorg that simultaneously affects both Tx-B and the chain's notion of "what's the maturity block." On Verus, with ~1-min blocks and notarization, this is implausible. For high-stakes loans, lender simply waits longer.
 
 ---
 
-## 7. Edge case coverage matrix
+## 8. Edge case coverage matrix
 
-| Scenario | Outcome |
-|---|---|
-| Cooperation, normal repayment | Borrower broadcasts Tx-Repay; atomic settlement |
-| Borrower defaults | Tx-B at maturity + grace |
-| Borrower dies/loses keys before maturity | Same as default |
-| **Lender dies/loses keys before borrower repays** | **Borrower broadcasts Tx-Repay normally — pre-signature is sufficient** |
-| Both die | Funds locked on chain; if Tx-C pre-signed, recoverable to borrower at extended_lockout |
-| Lender attempts to refuse repayment | Cannot — pre-signed Tx-Repay does not require lender's runtime cooperation |
-| Lender attempts to claim via Tx-B early | Cannot — nLockTime prevents pre-maturity broadcast (validated TESTING §17, §19) |
-| Lender attempts to claim via Tx-B after Tx-Repay broadcast | Cannot — collateral UTXO already consumed (validated TESTING §22) |
-| Lender's key compromised post-origination | Borrower repays early via Tx-Repay before attacker can broadcast Tx-B at maturity+grace |
-| Borrower wants to abandon loan mid-term | Can't unilaterally; defaults at maturity (lender claims) or Tx-C eventually fires |
-| Stranger tries to intercept Tx-Repay broadcast | Cannot — tx is complete and atomic; no offer in mempool to race |
-| **Stranger / borrower tries to substitute their address into Output 0** | **Cannot — paired output is signed-locked by lender's SIGHASH_SINGLE pre-signature (validated §24, D1)** |
-| **Borrower tries to underpay Output 0 amount** | **Cannot — signature commits to exact amount (validated §24, D2)** |
-| Subjective dispute (e.g. "lender's address was wrong at origination") | Off-chain courts. Chain record is admissible evidence. |
-| Borrower's R-address compromised | User-side OPSEC issue; mitigate with VerusID-controlled R-addresses with proper recovery |
-| Tx-Repay leaked publicly | Not exploitable — outputs are locked to lender + borrower; only borrower has UTXOs to add as funding inputs |
-| Tx-B leaked publicly | Output goes to lender only; strangers gain nothing |
-| Tx-Repay lost by borrower | Borrower can request a re-signing from lender (cooperative). If lender refuses, borrower defaults (cleaner outcome than malicious revoke ever was). |
-| Tx-B lost by lender | Lender loses default-claim path; if Tx-C exists, eventually fires for borrower at extended_lockout |
-| Reorg of any settlement tx | Wallet rebroadcasts; no value lost (§6.6) |
+| Scenario | Outcome | Validated |
+|---|---|---|
+| Cooperation, normal repayment | Borrower broadcasts Tx-Repay; atomic settlement | §16, §18, §20 |
+| Borrower defaults | Tx-B at maturity + grace | §17, §19, §21 |
+| Borrower dies/loses keys before maturity | Same as default | implicit |
+| **Lender dies/loses keys before borrower repays** | **Borrower broadcasts Tx-Repay normally — pre-signature is sufficient** | structural |
+| Both die | Funds locked; if Tx-C pre-signed, recoverable to borrower at extended_lockout | structural |
+| Lender attempts to refuse repayment | Cannot — pre-signed Tx-Repay does not require lender's runtime cooperation | structural |
+| Lender attempts to claim via Tx-B early | Cannot — nLockTime prevents pre-maturity broadcast | §17, §19 |
+| Lender attempts to claim via Tx-B after Tx-Repay broadcast | Cannot — collateral UTXO already consumed | §22 |
+| Borrower attempts to repay after Tx-B broadcast | Cannot — collateral UTXO already consumed | §29 |
+| Lender's key compromised post-origination | Borrower repays early before attacker's Tx-B | §17 |
+| **Stranger or borrower tries to redirect Output 0** | **Cannot — paired output sig-locked** | §24 (D1) |
+| **Borrower tries to underpay Output 0** | **Cannot — signature commits to exact amount** | §24 (D2) |
+| Stranger tries to intercept Tx-Repay broadcast | Cannot — tx is complete and atomic; no offer in mempool | structural |
+| Tx-Repay leaked publicly | Not exploitable — only borrower has matching funding-input keys | structural |
+| Tx-B leaked publicly | Output goes to lender only; strangers gain nothing | structural |
+| Tx-Repay lost by borrower | Cooperative re-sign; or recover from encrypted multimap backup | §13.1 |
+| Reorg of any settlement tx | Wallet rebroadcasts; no value lost | §7 |
 
 ---
 
-## 8. Off-chain storage requirements
+# Part II — Data layer
 
-Tx-O (during the offer window), Tx-Repay, Tx-B, and Tx-C must survive their relevant time windows. They are simple hex strings; durability is the holder's responsibility.
+## 9. Marketplace via contentmultimap
 
-### Recommended storage practices
+The contentmultimap of a VerusID functions as a chain-native marketplace data layer. **No separate server, API, or centralized index is required.** Anyone with a Verus node can discover loan offers via the standard `getidentity` RPC.
 
-- Multiple copies (cloud encrypted backup, offline storage, trusted third-party hold)
-- Both parties may keep copies of all four txs (mutual backup)
-- Store the predicted vault-funding txid alongside — needed to validate broadcastability
-- Optional: print as paper hex for offline storage
-- Profile V loans: store encrypted hex in the vault's contentmultimap for seed-recoverable backup
+### Validated end-to-end: §33
 
-### Loss scenarios
+A loan offer was published as a `loan.offer.v1` entry in a VerusID's contentmultimap and read back identically from two independent Verus nodes (local + .44 in different physical locations). Tx: `694ed5cfc13d4fb0234d7fa2759a336b163c59b42ee0b71581ff816062bb00a8`.
 
-| Lost item | Consequence |
-|---|---|
-| Tx-O (lender, before takeup) | Lender can re-sign and re-issue offer; borrower hadn't broadcast yet |
-| Tx-Repay (borrower) | Borrower loses canonical repayment path; can request re-signing from lender (cooperation needed). If lender refuses, borrower defaults. |
-| Tx-B (lender) | Lender loses default-claim; if Tx-C exists, eventually fires for borrower at extended_lockout |
-| Tx-C (borrower) | Last-resort backup gone; if lender broadcasts Tx-B normally, no harm |
-| All settlement txs | Depends on cooperation: if both parties online and willing, can re-sign. If not, borrower's option is default; lender's recourse is the chain record + courts. |
+### Standard entry types (Part II §12 defines canonical VDXF keys)
 
----
+```
+loan.offer.v1     — lender publishes terms they'll lend at
+loan.request.v1   — borrower publishes terms they need
+loan.history.v1   — co-signed loan outcomes (§10)
+loan.status.v1    — active loan state (active, settled, defaulted, rescued)
+```
 
-## 9. Implementation notes
+Each is a hex-encoded JSON payload under a canonical VDXF key. Wallets write to their owner's multimap when posting; readers parse any VerusID's multimap for these keys.
 
-### Wallet UX requirements
-
-A reference wallet implementation should:
-
-1. **Vault discovery**: for Profile L, derive the p2sh address from both parties' pubkeys; for Profile V, register or look up the VerusID.
-2. **Origination ceremony coordinator**: walk both parties through the multi-step signing in sequence; warn if any settlement template is skipped.
-3. **Pre-signed tx storage**: encrypted backup of Tx-O/Tx-Repay/Tx-B/Tx-C with cloud sync option, paper-export option, status tracking per loan.
-4. **Repayment helper**: at borrower's request, automatically consolidate UTXOs and append to Tx-Repay template with correct output structure.
-5. **Default-claim notification**: prompt lender well before grace period ends to broadcast Tx-B if no Tx-Repay broadcast.
-6. **Tx-Repay expiry warning**: prompt borrower before Tx-Repay's expiryheight passes; once expired, only Tx-C remains as borrower's recovery path.
-7. **Reorg handling**: detect if a confirmed settlement tx gets reorged out and automatically rebroadcast.
-
-### Loan terms encoding
-
-Profile V can store loan terms in the vault's contentmultimap under a VDXF key:
+### Lender offer entry
 
 ```json
 {
-  "<loan-terms-vdxf-key>": [{
-    "<loan-terms-content-vdxf-key>": {
-      "version": 1,
-      "principal": <amount>,
-      "principal_currency": "<currency-id>",
-      "interest": <amount>,
-      "interest_currency": "<currency-id>",
-      "collateral": <amount>,
-      "collateral_currency": "<currency-id>",
-      "maturity_block": <number>,
-      "grace_blocks": <number>,
-      "extended_lockout_blocks": <number>,
-      "borrower_id": "<borrower-personal-id-or-pubkey>",
-      "lender_id": "<lender-personal-id-or-pubkey>",
-      "vault_funding_txid": "<predicted-or-actual-txid>"
-    }
-  }]
+  "version": 1,
+  "type": "lend",
+  "principal": {"currency": "<currency-id>", "amount": <amount>},
+  "collateral": {"currency": "<currency-id>", "amount": <min_amount>},
+  "rate": <fraction>,
+  "term_days": <number>,
+  "lender_pubkey": "<compressed-hex>",
+  "lender_address": "<R-address-or-i-address>",
+  "valid_until_block": <number>,
+  "active": true | false
 }
 ```
 
-Profile L lacks on-chain storage for loan terms. Keep a signed copy off-chain (e.g. PDF with both parties' signatures) for evidentiary purposes.
+### Borrower request entry
 
-### Currency support
+```json
+{
+  "version": 1,
+  "type": "borrow",
+  "principal_wanted": {"currency": "<currency-id>", "amount_min": ..., "amount_max": ...},
+  "collateral_offered": {"currency": "<currency-id>", "amount_max": ...},
+  "term_days_max": <number>,
+  "interest_rate_max": <fraction>,
+  "borrower_pubkey": "<compressed-hex>",
+  "active": true | false
+}
+```
 
-**Principal, interest, repayment, and collateral** can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, DAI.vETH, tBTC.vETH, vUSDC), or PBaaS chain currencies.
+### What an explorer or wallet can show
 
-**Mainnet-validated constraints (TESTING.md §31, §32):**
+A page like `/lending/offers` queries known VerusIDs (or a filtered subset) for `loan.offer.v1` entries and renders:
 
-- ✅ **VRSC collateral** works in both Profile L (p2sh) and Profile V (i-address) vaults with the canonical async-pre-sign primitive. Most validated tests use this (§16, §17, §18-§30).
-- ✅ **Non-VRSC collateral in Profile V (i-address) vault** also works with the canonical async-pre-sign primitive — validated mainnet §32. SIGHASH_SINGLE|ANYONECANPAY signs reserve-currency cryptocondition inputs correctly when the wallet handles key lookup (pass `null` for prevtxs and privkeys to `signrawtransaction`).
-- ❌ **Non-VRSC collateral in Profile L (p2sh) vault** is impossible — reserve-currency cryptocondition outputs to plain p2sh script hashes are non-standard at the chain level. The chain rejects the origination tx with `bad-txns-failed-params-precheck`. Non-VRSC collateral requires Profile V (i-address) vault.
+| Lender ID | Principal | Collateral | LTV | Rate | Term | Track Record |
+|---|---|---|---|---|---|---|
+| `bob.lender@` | 5 DAI | 10 VRSC | 50% | 10% | 30d | 47 settled / 2 defaulted |
+| `desk.lendingco@` | 1000 DAI | 2000 VRSC | 50% | 8% | 90d | 312 settled / 5 defaulted |
 
-**Tooling caveat (not a protocol limitation):**
+Track record is computed from each lender's `loan.history.v1` entries (§10).
 
-`signrawtransaction` has two key-handling paths:
-- **Wallet key-lookup path** (when prevtxs and privkeys are both `null`): the wallet associates input scriptPubKeys to addresses to keys directly. Works for cryptocondition reserve-transfer inputs.
-- **Explicit-key path** (when privkeys is a non-empty array): the signer evaluates the prevtx scriptPubKey to determine signing requirements. The cryptocondition reserve-transfer opcode is not understood by this path, fails with `Opcode missing or not understood`.
+### Discovery scaling
 
-Wallets implementing the protocol should use the wallet key-lookup path for any input that's a cryptocondition output.
+Three plausible patterns:
 
-**Tested workaround that turned out unnecessary:** mixing VRSC dust with reserve currency in the vault output. Doesn't change the signing behavior (still depends on wallet key-lookup path). Documented in TESTING.md §31 as historical record.
+- **A — Walk all VerusIDs.** Doesn't scale; not recommended.
+- **B — Convention: register under a known parent.** Lenders register `<random>.lend@` sub-IDs per offer. Browsers query just that parent's children. Bounded set.
+- **C — Hybrid: explorers index the chain.** Convention defines schema; explorers maintain caches. Multiple competing explorers possible.
 
-### Profile choice for non-VRSC collateral
-
-| Collateral currency | Profile L (p2sh) | Profile V (i-address) |
-|---|---|---|
-| VRSC | ✅ works | ✅ works |
-| DAI / tBTC / any reserve currency | ❌ chain rejects | ✅ works (validated §32) |
-
-For loans involving non-VRSC collateral, use Profile V. The vault VerusID is the cost (sub-ID fee or top-level registration), but settlement properties (async pre-sign, lender-offline-at-repayment, broadcaster-pays-fee) all hold.
-
-### LTV (loan-to-value) recommendations
-
-The pre-signed-Tx-Repay design eliminates lender stonewalling. The remaining concern is borrower default risk:
-
-- **Strangers**: don't lend (no protocol-level reputation system)
-- **Reputation-bonded counterparties**: 50-70% LTV common
-- **Trusted relationships**: 30-50% LTV acceptable
-- **Tight LTV (>80%)**: lower interest justified; minimal default arbitrage incentive remains
-
-Lower LTV = higher temptation for borrower to default and let lender claim collateral. Choose to match counterparty trust level.
+The spec defines the schema but does not mandate a discovery mechanism. **Pattern C is the practical default** — any explorer can index, none is canonical.
 
 ---
 
-## 10. Limitations and known issues
+## 10. Reputation and credit history
+
+For an active lending market — where strangers want to evaluate counterparties and price risk — VerusIDs enable an on-chain credit-identity layer.
+
+### The mechanism
+
+At outcome (settle/default/rescue), each party independently writes a `loan.history.v1` entry to their own VerusID's multimap. The entry references:
+- The vault address (canonical loan ID)
+- Origination tx (Tx-O or Tx-A)
+- Outcome tx (Tx-Repay, Tx-B, or Tx-C)
+- Counterparty's VerusID (cross-reference)
+- Block heights for ordering
+- (Optional) `prev_entry_hash` for tamper-evident hash-chaining
+
+```json
+{
+  "version":         1,
+  "vault_address":   "bYCcAqB7..." or "i6ebreh...",
+  "role":            "borrower" | "lender",
+  "counterparty_id": "<other-party-VerusID>",
+  "principal":       {"currency": "...", "amount": ...},
+  "collateral":      {"currency": "...", "amount": ...},
+  "rate":            <fraction>,
+  "term_days":       <number>,
+  "originated_tx":   "<txid>",
+  "originated_block": <number>,
+  "outcome":         "settled" | "defaulted" | "rescued",
+  "outcome_tx":      "<txid>",
+  "outcome_block":   <number>,
+  "prev_entry_hash": "<sha256 of previous entry on this ID>"
+}
+```
+
+### Asymmetric writes (no co-signing required)
+
+Each party writes their own entry on their own multimap. **No co-signing needed across IDs** — the truth is the on-chain tx, and both entries reference the same vault address and tx pair. If one party refuses to write their entry as a grief, the chain truth is still verifiable from the actual txs.
+
+### Verifiability properties
+
+When a future counterparty Charlie evaluates Bob's history:
+
+1. **Each entry's txids exist on chain** — Charlie verifies via `getrawtransaction`. Fakes detected immediately.
+2. **The vault output really went to / came from Bob** — Charlie checks the txs' outputs.
+3. **The counterparty's matching entry exists** — Charlie reads `counterparty_id`'s multimap and finds an entry for the same vault. Both sides agree.
+4. **No counterparty entry exists** — suspicious; chain truth still proves the loan but the counterparty refused to attest. Charlie weights accordingly.
+5. **Hash-chain integrity** — `prev_entry_hash` makes inserting fake entries between real ones detectable.
+
+### The credit graph
+
+Once enough loans accumulate, the chain hosts a public credit graph: who has lent to whom, when, in what amounts, with what outcomes. Anyone can compute scoring functions over this graph. **No canonical scoring authority.** Multiple wallets/explorers can implement different scoring algorithms; users can choose which to trust.
+
+This shifts the practical envelope of the protocol from "private agreements between known parties" to "permissionless capital market with cryptographic credit identity."
+
+---
+
+## 11. Encrypted coordination
+
+VerusIDs support encrypted contentmultimap entries via identity z-keys. Data encrypted to a specific VerusID can only be decrypted by the holder of that ID.
+
+### Hex backup (durable, seed-recoverable)
+
+The biggest operational risk in any pre-signed-tx protocol is **losing the hex**. Each party encrypts pre-signed templates to their own viewing key and writes them to their own multimap:
+
+```json
+{
+  "loan.tx-repay.encrypted.v1": {
+    "vault_address": "...",
+    "encrypted":     "<base64 ciphertext, encrypted to alice@'s viewing key>"
+  }
+}
+```
+
+Recovery: import seed → derive viewing key → decrypt → recover hex. No file backups needed. Works as long as the chain exists.
+
+### Async ceremony coordination
+
+The origination ceremony is a back-and-forth signing dance. With encrypted multimap entries, the chain becomes the message bus:
+
+```
+loan.accept.v1                  (borrower → lender, encrypted)
+loan.tx-o.draft.v1              (encrypted)
+loan.tx-o.signed.v1             (encrypted)
+loan.tx-repay.template.v1       (encrypted, pre-signed by both)
+loan.tx-b.template.v1           (encrypted, pre-signed by both)
+loan.tx-c.template.v1           (encrypted, pre-signed by both)
+```
+
+Each entry is one `updateidentity` write. The recipient's wallet polls and processes. Neither party needs to be online simultaneously.
+
+### Encrypted loan terms
+
+Terms can be encrypted, leaving public visibility only to "VerusID alice@ has an active loan" (via `loan.status.v1`). Useful for OTC-style lending where terms are commercially sensitive.
+
+### Trust dependencies
+
+- Identity z-keys are derived from the holder's seed. Lost seed = lost ability to decrypt past entries.
+- Encryption uses Verus's existing primitives. No new cryptography introduced.
+
+---
+
+## 12. VDXF schema registry
+
+VDXF (Verus Data Exchange Format) keys are derived deterministically from string identifiers via `getvdxfid`. Anyone computing `getvdxfid "loan.offer.v1"` gets the same canonical key.
+
+**Validated VDXF key (§33):** `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy` for `loan.offer.v1`.
+
+### Canonical keys (v1)
+
+| Identifier | VDXF key | Purpose |
+|---|---|---|
+| `loan.offer.v1` | `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy` | Lender's open offer |
+| `loan.request.v1` | (compute via `getvdxfid`) | Borrower's request |
+| `loan.history.v1` | (compute via `getvdxfid`) | Outcome attestations |
+| `loan.status.v1` | (compute via `getvdxfid`) | Active loan state |
+| `loan.accept.v1` | (compute via `getvdxfid`) | Borrower's acceptance (encrypted) |
+| `loan.tx-o.draft.v1` | (compute via `getvdxfid`) | Ceremony Tx-O draft (encrypted) |
+| `loan.tx-repay.template.v1` | (compute via `getvdxfid`) | Pre-signed Tx-Repay (encrypted) |
+| `loan.tx-b.template.v1` | (compute via `getvdxfid`) | Pre-signed Tx-B (encrypted) |
+| `loan.tx-c.template.v1` | (compute via `getvdxfid`) | Pre-signed Tx-C (encrypted) |
+
+### Versioning
+
+VDXF keys are immutable. Schema upgrades go via a new key (`loan.offer.v2`). Wallets supporting multiple versions read all and prefer the highest.
+
+### Encoding
+
+Each multimap entry value is a hex-encoded payload. For public entries: hex-encoded JSON. For encrypted entries: hex-encoded ciphertext (encryption format defined per Verus's existing identity z-key primitives).
+
+---
+
+# Part III — Implementation guidance
+
+## 13. Wallet UX requirements
+
+A reference wallet implementation should provide:
+
+1. **Marketplace browsing** — query VerusIDs for `loan.offer.v1` and `loan.request.v1` entries; render as a filterable list.
+2. **Reputation aggregation** — for any candidate counterparty, fetch their `loan.history.v1` entries and compute a summary (count, default rate, tenure, counterparty diversity).
+3. **Reputation gating** — let the user set thresholds (max default rate, min tenure, min loans). Hide or warn on offers below threshold.
+4. **Origination ceremony coordinator** — handle the multi-step signing dance via encrypted multimap writes; expose simple "Accept offer" UX.
+5. **Encrypted hex storage** — write pre-signed templates to user's own multimap as durable backup.
+6. **Settlement helper** — at user's request, retrieve template, attach funding inputs, sign with `SIGHASH_ALL`, broadcast.
+7. **Default-claim notification** — prompt lender well before grace period ends.
+8. **Tx-Repay expiry warning** — prompt borrower before `expiryheight` passes.
+9. **Reorg handling** — detect if a confirmed settlement tx gets reorged out and automatically rebroadcast.
+10. **Outcome attestation** — write `loan.history.v1` entry on outcome confirmation.
+
+### Critical implementation note: signing path
+
+Use `signrawtransaction <hex> null null <flags>` for cryptocondition reserve-currency inputs. The explicit-key path (`[] ["<priv>"]`) fails with `Opcode missing or not understood`. See §3.4 and TESTING §32.
+
+### Wallets must implement raw-tx extension client-side
+
+The broadcaster-pays-fee variants (R-β, B-β) and Tx-O require adding inputs/outputs to a *pre-signed* template without losing the existing signature on Input 0. There is no CLI command that does this directly — `createrawtransaction` always builds from scratch.
+
+A reference Python helper (`extend_tx.py`, ~80 lines) was used during validation. Wallets need the equivalent functionality in their implementation language. **This does not require any new Verus RPC** — the work is purely client-side serialization. The protocol uses only existing chain features and existing RPCs.
+
+Pure-CLI users CAN run the simpler variants (Tx-A cooperative origination + collateral-pays-fee settlement). The broadcaster-pays-fee variants and Tx-O require a small extension helper.
+
+---
+
+## 14. Profile choice in practice
+
+| Vault | Borrower's identity | Lender's identity | What you get |
+|---|---|---|---|
+| p2sh (L) | R-address | R-address | Cheapest. Fully anonymous. No reputation. |
+| p2sh (L) | VerusID | VerusID | **Recommended for active markets** — cheap vault + reputation/multimap features for both parties |
+| VerusID (V) | VerusID | VerusID | Maximum on-chain context (loan also has its own multimap entries) |
+| VerusID (V) | R-address | R-address | Possible but unusual — VerusID adds little if neither party has one |
+
+The recommended default is **p2sh vault + party VerusIDs**: zero per-loan registration cost, full reputation/multimap features. Profile V vaults are reserved for cases where the loan itself benefits from being a named on-chain entity (lending desks, branded products, syndicated loans).
+
+---
+
+## 15. Sybil defenses
+
+Reputation is gameable by registering many VerusIDs and faking history. The following heuristics raise the cost of attack and should be implemented in scoring algorithms:
+
+- **Tenure weighting**: a 6-month-old ID weighs more than a 6-day-old one.
+- **Counterparty diversity**: 100 loans to 100 different counterparties weighs much more than 100 loans to 3 counterparties (anti-cycling).
+- **Stake weighting**: a single $10k loan with clean settlement weighs more than 100 $1 loans.
+- **Graph cluster analysis**: the credit graph is public; cycles and clusters of mutual transactions are detectable.
+- **Tenure mismatch**: 100 IDs registered in the same week is suspicious.
+- **Collateral source tracing**: if a counterparty's collateral originated from the candidate's main address, that's a fingerprint.
+
+These are scoring heuristics, not protocol-level rules. Different wallets can implement different aggressiveness; users choose which scoring they trust.
+
+---
+
+# Part IV — Reference
+
+## 16. Validated primitives
+
+Each item below was directly tested on Verus mainnet. See [TESTING.md](./TESTING.md) for txid references and full procedures.
+
+| # | Primitive | Validation |
+|---|---|---|
+| Vault | 2-of-2 multisig vault prevents unilateral redirect (Profile V) | ✅ §16 |
+| Vault | 2-of-2 p2sh vault prevents unilateral redirect (Profile L) | ✅ §18 |
+| Origination | Cooperative raw multi-party tx (Tx-A) | ✅ §16, §18 |
+| Origination | **Atomic-swap origination (Tx-O)** | ✅ §25 |
+| Settlement | Pre-signed Tx-Repay with `SIGHASH_SINGLE\|ANYONECANPAY` | ✅ §16, §18, §20 |
+| Settlement | Cross-currency (VRSC collateral + DAI principal/interest) | ✅ §18, §20 |
+| Settlement | Broadcaster-pays-fee variant (collateral returned in full) | ✅ §20 (Tx-Repay), §21 (Tx-B) |
+| Default | nLockTime enforcement on Profile V (i-address) input | ✅ §17 |
+| Default | nLockTime enforcement on Profile L (p2sh) input | ✅ §19 |
+| Default | Pre-signed Tx-B with `SIGHASH_SINGLE\|ANYONECANPAY` + nLockTime | ✅ §21 |
+| Rescue | **Tx-C rescue path** | ✅ §23 |
+| Mutex | Tx-Repay broadcast invalidates pre-signed Tx-B (UTXO consumption) | ✅ §22 |
+| Mutex | Tx-B broadcast invalidates pre-signed Tx-Repay (UTXO consumption) | ✅ §29 |
+| Adversarial | Pre-locktime broadcast rejected as `64: non-final` | ✅ §17, §19 |
+| Adversarial | Output 0 recipient tampering rejected | ✅ §24 (D1) |
+| Adversarial | Output 0 amount tampering rejected | ✅ §24 (D2) |
+| Recipient | SIGHASH-pre-signed Output 0 to a VerusID i-address | ✅ §28 |
+| Generality | Generic p2p atomic currency swap (no loan structure) | ✅ §30 |
+| Currency | **Non-VRSC collateral with SIGHASH_SINGLE\|ANYONECANPAY** | ✅ §32 |
+| Tooling | Wallet key-lookup path required for cryptocondition inputs | ✅ §32 |
+| Data | **Marketplace data layer (loan.offer.v1 in multimap, cross-node readable)** | ✅ §33 |
+| Options | **Pre-paid premium + atomic exercise + expiryheight** | ✅ §26 |
+| Options | **Expired-path: rejection + writer recovers underlying** | ✅ §27 |
+
+33 distinct test scenarios, all on Verus mainnet, all txids in TESTING.md.
+
+---
+
+## 17. Limitations and known issues
 
 ### What this protocol cannot do
 
@@ -541,448 +780,42 @@ Lower LTV = higher temptation for borrower to default and let lender claim colla
 - **Provide instant on-chain dispute resolution**. Pre-signed transactions cover the main cases; subjective disputes go to real-world courts.
 - **Support variable-rate or amortizing loans**. Output 0 of each settlement tx is signed-locked at origination. Variable terms require re-signing.
 - **Allow joint mid-loan cancellation without re-signing**. There's no protocol-level "abandon" path — parties either cooperate to re-sign or wait for default/Tx-C.
+- **Enforce reputation honesty**. Any party can refuse to attest the outcome on their own multimap. Counterparties verify against on-chain truth (the actual settlement tx); absence of a counterparty entry is itself a signal.
 
 ### What requires off-chain trust
 
-- **Identifying the counterparty**: this is a private agreement between two known parties.
-- **Pricing the loan correctly (LTV, interest)**: borrower and lender agree off-chain.
-- **Subjective disputes**: real-world legal action, with chain evidence.
+- **Identifying the counterparty initially** — but reputation reduces this once track records exist
+- **Pricing the loan correctly** — counterparties agree off-chain; reputation informs but doesn't dictate
+- **Subjective disputes** — real-world legal action, with chain evidence
 
 ### Untested aspects (conservative assumptions)
 
-- Verus mainnet behavior under deep chain-reorg stress for ANYONECANPAY signatures (well-tested in Bitcoin generally, expected to hold on Verus).
-- Cross-chain loan denominations involving Verus PBaaS bridges.
-- Non-VRSC collateral with VRSC-only fee budget — argued correct via §20-§21 cross-currency results, not directly tested with e.g. tBTC.vETH as collateral.
+- Behavior under deep chain reorganizations (>10 blocks; reorg-safety reasoned in §7)
+- Cross-chain loan denominations involving Verus PBaaS bridges
+- Performance characteristics of marketplace browsing at large scale (tens of thousands of active offers)
+- Sybil-attack resistance of specific scoring algorithms (these are application-level, not protocol)
 
 ---
 
-## 11. Reference: empirically validated primitives
+## 18. Future work / roadmap
 
-Each of the following was directly tested on Verus mainnet during development. See [TESTING.md](./TESTING.md) for txid references.
+| Item | Priority | Effort | Dependencies |
+|---|---|---|---|
+| Reference wallet implementation (handles ceremony + storage + UX) | **P0** | medium | spec stable |
+| VDXF schema canonicalization (formal registry) | P1 | small | none |
+| Marketplace explorer (aggregates offers/requests + reputation rendering) | P1 | medium | wallet basics |
+| Reputation scoring algorithms (multiple competing approaches) | P1 | medium | history schema |
+| Encrypted-multimap ceremony coordinator | P2 | medium | wallet basics |
+| Browser-based offer board (no desktop wallet required) | P2 | medium | wallet API |
+| Variable-rate / amortizing loan support (via re-signing protocol) | P3 | medium | spec extension |
+| Spec for syndicated/multi-party loans | P3 | research | new spec |
+| Shielded vault primitive (full bilateral privacy) | research | hard | crypto primitive |
 
-| Primitive | Validation |
-|---|---|
-| 2-of-2 multisig vault prevents unilateral redirect (Profile V) | ✅ §16 |
-| 2-of-2 multisig vault prevents unilateral redirect (Profile L, p2sh) | ✅ §18 |
-| Atomic origination via cooperative raw multi-party tx (Tx-A) | ✅ §16, §18 |
-| **Atomic origination via SIGHASH_SINGLE\|ANYONECANPAY pre-signed swap (Tx-O)** | ✅ §25 |
-| Pre-signed Tx-Repay with `SIGHASH_SINGLE\|ANYONECANPAY` (canonical) | ✅ §16, §18, §20 |
-| Cross-currency settlement (VRSC collateral + DAI principal/interest) | ✅ §18, §20 |
-| nLockTime enforcement on Profile V (i-address) input | ✅ §17 |
-| nLockTime enforcement on Profile L (p2sh) input | ✅ §19 |
-| Pre-signed Tx-B with `SIGHASH_SINGLE\|ANYONECANPAY` + nLockTime | ✅ §21 |
-| Broadcaster-pays-fee variant (collateral returned in full) | ✅ §20 (Tx-Repay), §21 (Tx-B) |
-| **Tx-C rescue path** | ✅ §23 |
-| Tx-Repay broadcast invalidates pre-signed Tx-B (UTXO consumption) | ✅ §22 |
-| Pre-locktime broadcast rejected as `64: non-final` | ✅ §17, §19 (diagnostic) |
-| **Output 0 recipient tampering rejected (D1)** | ✅ §24 — `mandatory-script-verify-flag-failed` |
-| **Output 0 amount tampering rejected (D2)** | ✅ §24 — `mandatory-script-verify-flag-failed` |
-| Front-run protection (no offer ever in mempool for Tx-Repay) | ✅ structural |
-
-Negative results from the design phase (ruled out alternative patterns):
-- For-clause identity-definition does NOT enforce contents — ❌ ruled out Pay-ID pattern
-- Stranger CAN take currency-for-ID offer — ❌ ruled out vault-makes-offer pattern
+The spec itself is considered stable for v1.0. Implementation is the bottleneck.
 
 ---
 
-## 11.5 The protocol as a generalization
-
-The four pre-signed transactions in §3 are all instances of the same primitive: **a 2-input atomic swap with one party's contribution sig-locked at offer time**. The lending protocol is one specialization. Other specializations of the same primitive:
-
-### Generic p2p currency swap
-
-The same SIGHASH_SINGLE|ANYONECANPAY pattern enables direct p2p atomic swaps between any two currencies, with no loan attached:
-
-```
-Maker pre-signs offline:
-  Input 0:  Maker's currency-A UTXO     (signed SIGHASH_SINGLE | ANYONECANPAY)
-  Output 0: A_amount → Taker            (sig-locked, paired with Input 0)
-
-Taker fills the offer at takeup:
-  Input 1:  Taker's currency-B UTXO     (signed SIGHASH_ALL)
-  Output 1: B_amount → Maker            (Taker constructs)
-  Output 2: Taker's change
-
-One tx. Atomic. Either both sides happen or neither.
-```
-
-This is essentially what Verus's `makeoffer` / `takeoffer` provides at the wallet layer, but at the raw-tx level. It's also the same primitive that this protocol's Tx-O uses — Tx-O is just a swap whose Output 1 is "deposit collateral at vault" rather than "deliver currency-B to maker".
-
-### Conditional payments
-
-A maker can pre-sign an offer that pays out only if a taker delivers a specific output. Useful for atomic services-for-payment exchanges, escrow-less bounties, etc.
-
-### What else the primitive can do
-
-The protocol's foundational primitive — "Maker pre-signs an output with SIGHASH_SINGLE|ANYONECANPAY; Taker extends and broadcasts atomically" — works on any output the Verus chain accepts. Output 0 can be:
-
-| Output type | Application |
-|---|---|
-| p2pkh / p2sh paying any currency | Generic p2p currency swap |
-| Reserve-transfer cryptocondition (any currency, including DAI, tBTC, basket tokens) | Cross-currency swap |
-| VerusID `updateidentity` output (changing primary, multimap, etc.) | Atomic ID transfer / sale |
-| Single-supply token output (NFT) | NFT sale, NFT-for-NFT swap, NFT-for-currency |
-| Multi-currency cryptocondition | Basket-for-basket trade |
-| p2sh paying into another vault | What this protocol's Tx-O does |
-
-Combined with `expiryheight` (chain rejects broadcast after a block height) and `nLockTime` (chain rejects broadcast before a block height), the primitive supports:
-
-- **Atomic currency swaps** (replacement for centralized exchanges for any pair Verus supports natively)
-- **VerusID sales** (atomic transfer of an ID for payment)
-- **NFT marketplace** (sale or trade with no marketplace operator in the loop)
-- **Conditional escrow** (Maker releases payment only when Taker delivers a specific output)
-- **Bounty payments** (Maker pre-commits; first valid delivery claims)
-- **Limit orders** (Maker pre-signs at a target price; Takers fill when market reaches it)
-- **Options markets** (Maker pre-signs exercise tx; expiryheight gates exercise window — covered calls, puts, spreads, all natively. See §11.6.)
-- **Cross-chain swaps** (Verus Swap already uses this primitive across PBaaS chains)
-- **Lending** (this spec — origination + repayment + default + rescue all use the same primitive)
-
-The lending protocol is not introducing new primitives. It's a **structured multi-phase choreography of a pre-existing Verus primitive** — the same SIGHASH_SINGLE|ANYONECANPAY pattern the Verus marketplace uses internally for offers. The contribution is the choreography: predicted-txid coordination, expiryheight to prevent stale settlement, nLockTime to gate default and rescue, and the symmetric sigh disposition across origination, repayment, default, and rescue.
-
-Anything expressible as "Maker irrevocably pre-commits to an output, Taker triggers the trade" works with this primitive on Verus today.
-
----
-
-## 11.6 Options markets — sketch
-
-A practical design for an options market built on this primitive. The option must be **paid for upfront** (premium delivered before the buyer holds the exercise hex); writers will not accept "pay only if exercised" structures because that exposes them to all of the downside with none of the premium income.
-
-### Option as a tradeable artifact
-
-The cleanest design wraps the exercise transaction as a transferable on-chain artifact:
-
-```
-Writer creates a Profile V sub-ID per option:
-  Vault VerusID:  option-XXX.writer@
-  Primary:        [Writer]   (initially)
-  Multimap:       contains encrypted exercise hex (encrypted to whoever currently owns the ID)
-  Underlying:     locked in a separate p2sh vault that the exercise hex spends
-```
-
-The option is now an identity. Selling the option = transferring the identity, atomically, via the same Tx-O-style swap pattern as in §3.1:
-
-```
-Writer pre-signs a "transfer for premium" tx:
-  Input 0:   Writer's UTXO authorizing updateidentity        (signed SIGHASH_SINGLE | ANYONECANPAY)
-  Output 0:  updateidentity setting primary = Buyer's R-addr (the ID transfer itself, sig-locked)
-  expiryheight: option_offer_expiration                       (offer dies if not bought in time)
-
-Buyer takes by adding:
-  Input 1:   Buyer's premium UTXO     (signed SIGHASH_ALL)
-  Output 1:  premium → Writer's R-addr (the payment for the option)
-```
-
-Buyer atomically pays premium and gains control of the option ID. They can now decrypt the exercise hex from the ID's multimap and decide whether to exercise before its `expiryheight`.
-
-Buyer can also resell the option to another party using the same atomic-transfer pattern — secondary market for free.
-
-### Variants
-
-| Style | nLockTime on exercise tx | expiryheight on exercise tx |
-|---|---|---|
-| American call/put | 0 | option_expiration_block |
-| European call/put | option_expiration_block - 1 | option_expiration_block + grace |
-| Bermuda (specific dates only) | series of pre-signed exercise txs each with own locktimes | various |
-
-### Properties
-
-- **No custodian.** Underlying is in p2sh vault held by exercise hex; Writer can't touch until ID is back in their control or option expires.
-- **No marketplace operator.** Discovery via VerusID multimap (offers as identity entries) or off-chain.
-- **Atomic premium-for-option.** Buyer can never receive the option without paying; Writer can never receive premium without delivering. Single tx.
-- **Native cancellation.** Writer cancels by spending Input 0 elsewhere before any buyer takes the offer.
-- **Native expiration.** After expiryheight on the exercise tx, exercise is impossible. Writer reclaims underlying by broadcasting their pre-signed underlying-return tx (nLockTime = expiration+1).
-- **Secondary market.** Option owner can resell using the same primitive (transfer ID for new premium).
-
-### What's still trust-required
-
-- Writer must put the *correct* exercise hex in the multimap (not a fake). Verifiable on-chain by anyone who decrypts: simulate the exercise tx against the underlying p2sh vault and check the strike payment goes to the current ID owner.
-- Off-chain consensus on what the option means (which underlying, what strike, what expiration) — written in the multimap as plain JSON, signed by Writer.
-
-### What this is NOT
-
-- Not a substitute for a CEX with margin / leverage / liquidation. This is **fully-collateralized** options only. Writer must lock the underlying (call) or strike-cash (put) for the duration.
-- Not an oracle-dependent settlement. Settlement is pure delivery: exercise = exchange of underlying for strike, no oracle needed.
-
-### Mainnet validation
-
-The minimal mechanic — premium paid upfront, underlying locked at 2-of-2 vault, cooperative pre-sign of exercise tx with `expiryheight`, atomic exercise by buyer — is validated on Verus mainnet. See TESTING.md §26 for txids and full procedure.
-
----
-
-## 12. Future work
-
-- **Reference wallet implementation** (Verus Wallet V2 extension or standalone) speaking the protocol's pre-signed-tx format
-- **Origination ceremony tool** (web-based or CLI for guided multi-party signing)
-- **Offer-board / marketplace UX** built on Tx-O atomic-swap origination
-- **BTC collateral integration** via Verus Swap atomic-swap mechanics (cross-chain)
-- **Reputation system** layered on Profile V's contentMultimap for repeat counterparties
-- **Variable-rate loan support** via periodic Tx-Repay re-signing protocol
-- **Spec for syndicated/multi-party loans** (multiple lenders pool into one vault)
-
----
-
-## 13. Reputation and credit-identity (Profile V's strongest case)
-
-For ad-hoc loans between known parties, Profile L (p2sh, no VerusID) is sufficient. But for a real lending market — where strangers want to evaluate counterparties and price risk — Profile V's VerusID enables an on-chain credit-identity layer that doesn't exist in Profile L.
-
-### The mechanism
-
-At origination (or repayment / default), both parties cooperatively write a loan-history entry to BOTH their VerusIDs' contentmultimap. Because both parties sign the entry, neither can fabricate it unilaterally — it's a non-forgeable, non-repudiable record on chain.
-
-```json
-{
-  "loan.history.v1": [{
-    "loan.entry.v1": {
-      "loan_id":              "loan-XXXX.facility@",
-      "role":                 "borrower" | "lender",
-      "counterparty_id":      "<other-party-VerusID>",
-      "principal_currency":   "<currency-id>",
-      "principal_amount":     <amount>,
-      "interest_rate":        <fraction>,
-      "collateral_currency":  "<currency-id>",
-      "collateral_amount":    <amount>,
-      "ltv":                  <fraction>,
-      "term_days":            <number>,
-      "originated_tx":        "<txid>",
-      "originated_block":     <number>,
-      "outcome":              "settled" | "defaulted" | "in_progress" | "rescued",
-      "outcome_tx":           "<txid>",
-      "outcome_block":        <number>
-    }
-  }]
-}
-```
-
-### What anyone can compute from public chain
-
-For any VerusID, by reading their `loan.history.v1` multimap entries:
-
-- Default rate = `defaulted / (settled + defaulted)`
-- Total volume (principal across all entries)
-- Tenure (time since first loan)
-- Counterparty diversity (unique IDs interacted with)
-- Average LTV (risk discipline visible)
-- Recency (are they still active?)
-- Largest loan handled cleanly
-- Currency diversity
-
-Wallets and lending UX can implement custom scoring functions over this data. Anyone disagreeing with a scoring algorithm can implement their own. **There is no canonical scoring authority.**
-
-### Why this is different from traditional credit
-
-- **No centralized agency.** Scoring is purely a function over public on-chain data.
-- **No KYC.** Reputation is built within the Verus system; not linked to real-world identity unless the VerusID owner chooses to publish that linkage.
-- **Portable.** Same VerusID is recognized by every Verus-aware lending wallet. No data silos.
-- **Costly to discard.** VerusIDs can be transferred or abandoned, but the registration cost and observable abandonment make deliberate reputation torching deliberate (not automatic).
-
-### What this unlocks
-
-This shifts the practical envelope for what loans the protocol can support:
-
-| Loan to | Without reputation (today) | With reputation tracking |
-|---|---|---|
-| Known counterparty | works (existing design) | works + reputation accrues |
-| Friend-of-friend | works with manual due diligence | works with automated on-chain query |
-| **Anonymous stranger with track record** | doesn't work | **works at appropriate LTV/rate** |
-| Anonymous stranger with no track record | doesn't work | doesn't work (unchanged) |
-
-Importantly: **the protocol's cryptographic core doesn't change.** Reputation is purely a layer above the existing Tx-O/Tx-Repay/Tx-B/Tx-C primitive. A wallet that ignores reputation entries still works; a wallet that uses them gets richer counterparty filtering.
-
-### Trust assumptions
-
-- Loan-history entries are co-signed by both parties at relevant moments. Neither can lie unilaterally.
-- A party can refuse to sign the outcome entry to deny their counterparty a clean record. Mitigation: include the outcome txid in the entry; absence of an outcome entry next to a confirmed Tx-Repay/Tx-B is itself evidence visible to the chain.
-- Reputation can be game-able: someone could accumulate a clean record over many small loans, then default catastrophically on a large one. Counterparties should weight loans by size, not just count.
-- Sybil attacks: someone could create many VerusIDs, lend among themselves at small scale to fake history, then borrow large from a real counterparty. Defenses: counterparty diversity weighting (unique counterparties matter), loan-graph analysis (clusters of small reciprocal loans are suspicious), tenure weighting.
-
-### Implementation status
-
-- ✅ Verus contentmultimap supports the structured entries described above today
-- ✅ VDXF keys can be defined for `loan.history.v1` schema
-- ❌ Reference wallet: not yet implemented
-- ❌ Scoring algorithms: not yet defined; v1 might just expose raw fields and let UI render them
-
-This is the strongest reason to make Profile V a first-class option in the spec rather than a footnote.
-
-### 13.1 Encrypted multimap entries — durable hex storage and async coordination
-
-VerusIDs support encrypted contentmultimap entries via identity z-keys. Data encrypted to a specific VerusID can only be decrypted by the holder of that ID. This solves several practical problems for the lending protocol:
-
-#### Hex backup (durable, seed-recoverable)
-
-The biggest operational risk in Profile L is **losing the pre-signed hex**. If Alice loses her Tx-Repay file, she's forced into default even if she wanted to repay.
-
-In Profile V, the wallet can write the pre-signed hex to Alice's own VerusID multimap, encrypted to her own viewing key:
-
-```json
-{
-  "loan.tx-repay.v1": [{
-    "loan.tx-repay.encrypted.v1": {
-      "loan_id":     "loan-XXXX.facility@",
-      "encrypted":   "<base64 ciphertext, encrypted to alice@'s viewing key>"
-    }
-  }]
-}
-```
-
-Recovery: Alice imports her seed into a fresh wallet, derives her viewing key, decrypts the multimap entry, recovers the hex. No file backups needed. Works as long as the chain exists.
-
-The same pattern applies to Tx-B (lender-side), Tx-C (borrower-side rescue), and Tx-O (during the offer window).
-
-#### Async ceremony coordination
-
-The origination ceremony needs both parties to:
-1. Exchange pubkeys
-2. Build the templates
-3. Cooperatively sign each
-4. Verify their counterparts
-
-In Profile V with encrypted multimap, each step can be a multimap entry encrypted to the counterparty's viewing key. The wallet polls the counterparty's ID for new entries, processes them, and writes responses. Neither party needs to be online simultaneously. The ceremony becomes asynchronous via the chain itself acting as the message bus.
-
-```
-Define VDXF keys for the ceremony:
-  vrsc::loan.offer.v1               (lender posts offer, public or encrypted to specific borrower)
-  vrsc::loan.accept.v1              (borrower posts acceptance, encrypted to lender)
-  vrsc::loan.tx-o.draft.v1          (encrypted draft tx hex for cosigning)
-  vrsc::loan.tx-o.signed.v1         (fully signed Tx-O, encrypted to counterparty)
-  vrsc::loan.tx-repay.template.v1   (pre-signed Tx-Repay, encrypted to borrower)
-  vrsc::loan.tx-b.template.v1       (pre-signed Tx-B, encrypted to lender)
-  vrsc::loan.tx-c.template.v1       (pre-signed Tx-C, encrypted to borrower)
-  vrsc::loan.status.v1              (public — "active", "settled", "defaulted")
-```
-
-Each entry is a single multimap write; the recipient's wallet decrypts and processes. No off-chain server, no centralized coordinator.
-
-#### Encrypted loan terms
-
-Loan terms (counterparty identities, amounts, rates) can themselves be encrypted in the multimap. Anyone can see "VerusID alice@ has an active loan" (via the `loan.status.v1` public entry), but only the parties can read the terms. Useful for OTC-style lending where terms are commercially sensitive.
-
-#### Trust dependencies
-
-- Identity z-keys are derived from the holder's seed phrase. Same OPSEC as any wallet seed.
-- Recipient must possess the seed corresponding to their VerusID's viewing key. Lost seed = lost ability to decrypt past entries.
-- Encryption uses Verus's existing primitives. No new cryptography introduced.
-
-#### Implementation status
-
-- ✅ Verus identity z-keys exist
-- ✅ Encrypted multimap entries supported
-- ❌ Reference wallet flow: not yet built; could be added incrementally to existing Verus wallet
-- ❌ VDXF schema: needs canonical definition before interop is possible
-
-This collapses several "wallet UX problems" the spec currently flags into "use the chain as the storage and message bus." Profile V is the only profile that can do this — Profile L has no equivalent.
-
----
-
-## 14. Marketplace as a chain-native data layer
-
-Combined with §13 (reputation) and §13.1 (encrypted multimap), the contentmultimap functions as a fully decentralized data layer for a lending marketplace. **No platform operator. No user accounts beyond VerusIDs. No matching engine. Just standardized entries that any explorer or wallet can read.**
-
-### Standardized entry types
-
-```
-vrsc::loan.offer.v1     — lender publishes terms they'll lend at
-vrsc::loan.request.v1   — borrower publishes terms they need
-vrsc::loan.history.v1   — co-signed loan outcomes (§13)
-vrsc::loan.status.v1    — active loan state, public
-```
-
-Each is a standardized JSON payload under a canonical VDXF key. Wallets write to their owner's multimap when posting; readers query any VerusID for these keys.
-
-### Lender offer entry
-
-```json
-{
-  "loan.offer.v1": {
-    "version": 1,
-    "principal_currency": "<currency-id>",
-    "principal_amount": <amount>,
-    "collateral_currency": "<currency-id>",
-    "collateral_min_amount": <amount>,
-    "interest_rate": <fraction>,
-    "term_days": <number>,
-    "lender_broadcast_address": "<R-address-or-i-address>",
-    "lender_pubkey": "<compressed-hex>",
-    "active": true | false,
-    "valid_until_block": <number>
-  }
-}
-```
-
-### Borrower request entry
-
-```json
-{
-  "loan.request.v1": {
-    "version": 1,
-    "principal_currency_wanted": "<currency-id>",
-    "principal_amount_min": <amount>,
-    "principal_amount_max": <amount>,
-    "collateral_currency_offered": "<currency-id>",
-    "collateral_amount_max": <amount>,
-    "term_days_max": <number>,
-    "interest_rate_max": <fraction>,
-    "borrower_pubkey": "<compressed-hex>",
-    "active": true | false
-  }
-}
-```
-
-### What an explorer shows
-
-A page like `/lending/offers` queries all known VerusIDs (or a filtered subset) for `loan.offer.v1` entries and renders:
-
-| Lender ID | Principal | Collateral | LTV | Rate | Term | Track Record |
-|---|---|---|---|---|---|---|
-| `bob.lender@` | 5 DAI | 10 VRSC | 50% | 10% | 30d | 47 settled / 2 defaulted |
-| `desk.lendingco@` | 1000 DAI | 2000 VRSC | 50% | 8% | 90d | 312 settled / 5 defaulted |
-| ... | ... | ... | ... | ... | ... | ... |
-
-Symmetric `/lending/requests` page for borrowers seeking loans.
-
-Track record is computed from the lender's `loan.history.v1` entries — non-forgeable because each entry is co-signed by the counterparty at the loan's outcome (§13).
-
-### Match → ceremony
-
-Once a borrower picks an offer:
-
-1. Borrower's wallet writes `loan.accept.v1` to their own multimap, encrypted to the lender's z-key (per §13.1)
-2. Lender's wallet polls and finds the acceptance, decrypts, validates terms
-3. Cooperative origination ceremony proceeds via additional encrypted multimap entries (`loan.tx-o.draft.v1`, etc.)
-4. Tx-O broadcast atomically when borrower triggers
-5. Loan is now active; settlement templates stored encrypted on each party's multimap (§13.1)
-
-All ceremony coordination happens on chain. No off-chain server required.
-
-### Properties this gives you
-
-- **No platform.** Anyone can run an explorer with these queries. Multiple competing explorers with different ranking/filtering. Users can also query directly from a wallet without any explorer.
-- **Censorship-resistant.** No single party can deplatform a lender or borrower. The data lives on chain.
-- **Reputation-aware out of the box.** Track record is cryptographically attested via §13 co-signed entries.
-- **Native private DMs.** Encrypted multimap entries handle matchmaking and ceremony coordination without an off-chain message bus.
-- **No tokens, no protocol fees.** Just chain miner fees per multimap update tx (~0.0001 VRSC each).
-- **Settlement is the existing protocol.** The marketplace is purely a discovery and coordination layer above the cryptographic core.
-
-### What's needed to ship this
-
-| Component | Status |
-|---|---|
-| Multimap entries supported by Verus | ✅ exists |
-| VDXF key registry conventions | ✅ exists |
-| Standard schema for `loan.offer.v1` etc. | ❌ needs canonical definition (future PR) |
-| Explorer query / aggregation logic | ❌ application work (explorer teams) |
-| Wallet UI for entries + ceremony | ❌ reference wallet work |
-| Reputation scoring algorithm | ❌ optional — each wallet/explorer can implement its own |
-
-The chain provides the data layer. Everything above is application work that does not require Verus core changes.
-
-### What this enables structurally
-
-Today's framing in the README — "What it is NOT for: lending to anonymous strangers without external trust mechanisms" — relaxes substantially when the marketplace + reputation layer is in place. **Strangers with track records become acceptable counterparties at appropriate rates.** The protocol's practical envelope expands from "private agreements between two known parties" to "permissionless capital market with cryptographic credit identity."
-
-This is the same shift Bitcoin made: from "money for known parties" to "permissionless money." Bitcoin needed PoW + UTXO. Lending needs SIGHASH_SINGLE|ANYONECANPAY pre-commitment + multimap-based reputation. Both are existing primitives; the work is composition.
-
----
+# Appendices
 
 ## Appendix A: Glossary
 
@@ -991,66 +824,67 @@ This is the same shift Bitcoin made: from "money for known parties" to "permissi
 - **p2sh address**: Standard Bitcoin pay-to-script-hash address. Prefix `b` on Verus.
 - **vault**: Generic term for the address holding the loan's collateral. Either a 2-of-2 p2sh (Profile L) or a 2-of-2 VerusID i-address (Profile V).
 - **Tx-O**: Atomic-swap origination tx. Lender pre-signs offline; borrower triggers.
-- **Tx-A**: Cooperative raw-tx origination (alternative to Tx-O for synchronous ceremonies).
+- **Tx-A**: Cooperative raw-tx origination (alternative to Tx-O).
 - **Tx-Repay / Tx-B / Tx-C**: Settlement, default-claim, and rescue transactions. All share the same SIGHASH discipline.
-- **`makeoffer` / `takeoffer`**: Verus's native atomic-swap RPCs. Not used in the canonical design but conceptually similar to Tx-O.
-- **VDXF**: Verus Data Exchange Format, used for canonical key derivation in contentmultimap (Profile V only).
+- **VDXF**: Verus Data Exchange Format, used for canonical key derivation in contentmultimap.
 - **2-of-2 multisig**: A vault requiring 2 signatures from 2 specified parties.
 - **nLockTime**: Bitcoin/Verus tx-level timelock — chain rejects broadcast before specified block height.
 - **expiryheight**: Verus tx-level expiry — chain rejects broadcast at or after specified block height.
-- **SIGHASH flag**: Bitcoin/Verus signature scope specifier; controls which parts of a tx the signature commits to.
+- **SIGHASH flag**: Bitcoin/Verus signature scope specifier.
 - **SIGHASH_ALL**: Default; signature covers all inputs and all outputs.
-- **SIGHASH_ANYONECANPAY**: Modifier; signature covers only its own input (other inputs can be added/changed).
-- **SIGHASH_SINGLE | SIGHASH_ANYONECANPAY**: Combined; signature covers only its own input + the output at the same index. The protocol's foundational primitive — used in Tx-O, Tx-Repay, Tx-B, and Tx-C alike.
+- **SIGHASH_ANYONECANPAY**: Modifier; signature covers only its own input.
+- **SIGHASH_SINGLE | SIGHASH_ANYONECANPAY**: Combined; signature covers only its own input + the output at the same index. The protocol's foundational primitive.
 
-## Appendix B: Shielded variants (one-sided privacy with z-addresses)
+## Appendix B: Shielded variants
 
-Verus inherits Sapling z-address shielded transactions from Zcash. The protocol's transparent-side primitive cannot be ported wholesale to shielded form (Sapling doesn't expose per-input partial signing or shielded multisig), but **one-sided privacy** is achievable with no changes to the spec — only wallet UX.
+Verus inherits Sapling z-address shielded transactions. The protocol's transparent-side primitive cannot be ported wholesale to shielded form (Sapling doesn't expose per-input partial signing or shielded multisig), but **one-sided privacy** is achievable with no protocol changes.
 
 ### What works
 
-A Verus tx can mix transparent and shielded inputs/outputs. The transparent inputs continue to use SIGHASH flags as in §3, and the sighash computation per ZIP-0243 includes shielded portion commitments — so pre-signing remains valid.
+A Verus tx can mix transparent and shielded inputs/outputs. The transparent inputs continue to use SIGHASH flags as in Part I §4. ZIP-0243 sighash includes shielded portion commitments — pre-signing remains valid.
 
 | Variant | What's private | Mechanism |
 |---|---|---|
 | Lender receives privately | lender's identity, repayment amount as known to outside observers | Tx-Repay's Output 0 is a shielded output to lender's z-address |
-| Borrower funds privately | source of borrower's principal repayment | Tx-Repay's Input 1+ are shielded spends |
+| Borrower funds privately | source of borrower's principal/repayment | Tx-Repay's Input 1+ are shielded spends |
 | Premium paid privately | source of buyer's premium funds | premium tx is z→z or t→z |
 | Strike paid privately | source of buyer's strike at exercise | exercise tx Input 1 is shielded spend |
 
-In each case the SIGHASH_SINGLE|ANYONECANPAY pre-commit on the transparent vault input still works — the lender's signature commits to the *commitment* of the shielded output, and the chain enforces that the commitment can't be changed without invalidating the signature.
-
 ### What doesn't work
 
-| Wanted | Why it doesn't work |
+| Wanted | Why not |
 |---|---|
 | Shielded vault | Sapling has no native multisig — can't have a 2-of-2 shielded address holding collateral |
 | Pre-signed shielded settlement template | Shielded portions are proven monolithically; can't be partially constructed and extended later |
-| Hidden loan amounts at the vault | The vault is a transparent address; its UTXO value is public. The amount can be hidden only at the *inflows* and *outflows*, not at the vault itself |
-| Fully bilateral privacy | Vault must be transparent → its state is public, even if endpoint identities are shielded |
+| Hidden loan amounts at the vault | Vault is a transparent address; its UTXO value is public |
+| Fully bilateral privacy | Vault must be transparent; would need shielded multisig (research direction) |
 
-### Recommended use
+### Two paths for full bilateral privacy (research)
 
-For loans where party identity is sensitive (e.g. private business agreements, OTC desks not wanting to broadcast counterparty list), Profile L + shielded recipient outputs gives meaningful privacy. The vault address and loan amount become observable, but who's lending to whom doesn't.
+**Path 1 — Threshold signatures via MPC.** Sapling RedJubjub is Schnorr-like, amenable to multi-party threshold signing. Off-chain MPC protocol produces ONE valid spend signature; chain sees regular shielded spend. Loses async pre-sign property — both parties need to be online at signing time.
 
-For full bilateral privacy, wait for a shielded-multisig primitive (potentially via Verus's PBaaS roadmap, Orchard/Halo2 successor schemes, or BLS-based aggregation). Track as v0.6+ direction.
+**Path 2 — Adaptor signatures.** Maker produces an *incomplete* signature that completes only when a witness is revealed (Lightning PTLC-style). Maintains async-broadcast property. Significant cryptographic engineering required.
 
-### Not validated on mainnet
-
-The shielded-recipient variant should "just work" given that Sapling/transparent mixing is supported and SIGHASH semantics are well-defined per ZIP-0243. Not directly tested on mainnet during this spec's development. Worth a follow-up validation when the shielded UX is built.
+For v1, transparent-side + one-sided privacy via shielded recipient outputs is the recommended approach.
 
 ---
 
-## Appendix C: Profile V vs Profile L feature comparison
+## Appendix C: The primitive's other applications
 
-| Feature | Profile L (p2sh) | Profile V (VerusID) |
+The protocol's foundational primitive — "Maker pre-signs an output with `SIGHASH_SINGLE | ANYONECANPAY`; Taker extends and broadcasts atomically" — works on any output the Verus chain accepts. This is the Verus marketplace's internal SIGHASH discipline, lifted to the raw-tx level for direct multi-phase choreography.
+
+| Application | Output 0 type | Example |
 |---|---|---|
-| Vault address prefix | `b` | `i` |
-| Setup cost | $0 | ~$0.05–$30 (sub-ID fee or top-level) |
-| Setup steps on chain | None | 1-2 (name commitment + register) |
-| Human-readable name | No | Yes |
-| On-chain encrypted hex backup | No | Yes (contentmultimap) |
-| Reputation hooks | No | Yes (ID activity history) |
-| Cryptographic guarantees | Same | Same |
-| Reorg-safety | Same | Same |
-| Validated mainnet | §18-§25 (this spec, v0.5) | §16-§17 (v0.4) |
+| **Generic p2p currency swap** | reserve-transfer cryptocondition | DAI for VRSC, no loan structure (validated §30) |
+| **VerusID transfer / sale** | `updateidentity` output transferring ID | Buy `alice@` for 50 VRSC |
+| **NFT marketplace** | unique-supply token | Sell unique NFT for any currency |
+| **Conditional escrow** | currency to maker | Releases only on Taker delivering specific output |
+| **Bounty payments** | currency to maker | First valid delivery claims it |
+| **Limit orders** | currency to maker | Pre-signed at target price; takers fill when reached |
+| **Options markets** | currency to writer (with `expiryheight`) | Buyer exercises before expiration; otherwise writer recovers underlying (validated §26-§27) |
+| **Cross-chain swaps** | (via Verus Swap PBaaS bridge) | Same primitive across chains |
+| **Lending** | various per phase | This spec — Tx-O, Tx-Repay, Tx-B, Tx-C |
+
+The spec's contribution is the multi-phase choreography that ties together origination, repayment, default, and rescue using the same primitive plus locktime/expiryheight gating. Anything expressible as "Maker irrevocably pre-commits to an output, Taker triggers the trade" works with this primitive on Verus today.
+
+**No new opcodes. No tokens. No DAOs. No oracles. No custodians.**
