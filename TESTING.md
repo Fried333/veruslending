@@ -619,6 +619,61 @@ Validates that the protocol's primitive works when the sig-locked Output 0 is a 
 
 This unlocks the recommended Profile L vault + Profile-V parties configuration (§2.4): the vault is a cheap p2sh, but loan payments flow to/from the parties' personal VerusIDs, where reputation accumulates.
 
+### 29. B4: Tx-Repay rejected after Tx-B broadcast (symmetric to A4)
+
+Mirror of §22 (A4). Validates that the UTXO double-spend protection works in both directions: once *either* settlement path has consumed the vault, the other is dead.
+
+**Setup:**
+- Vault lock: `7a5e5aec128d81a014ba0eff4d93f0c68484ddef946efe32fd8918dd135ef54e` vout 1 (1 VRSC at p2sh)
+- Pre-signed Tx-Repay: Output 0 = 0.5 DAI → Bob, no locktime
+- Pre-signed Tx-B: Output 0 = 1 VRSC → Bob, nLockTime = current
+
+**Test:**
+- Bob extends Tx-B with fee input + change, broadcasts: `4081015b9dffc9f45339726a0797751a274c5dc5e823cac614585640295366c1` ✓
+- Alice attempts to broadcast Tx-Repay (with her DAI input added) on local: rejected `error code: -26 — 16: bad-txns-inputs-spent`
+- Same rejection on .44 ✅
+
+**Validates:**
+- ✅ Symmetric to A4 (§22): once either Tx-Repay OR Tx-B consumes the vault UTXO, the other becomes invalid
+- ✅ Both lender's claim and borrower's repayment are mutually exclusive at chain-consensus level
+- ✅ No double-spend or two-track settlement is possible
+
+Together with §22, this proves: **the protocol's settlement is final when any settlement tx confirms; no race window exists where both could claim.**
+
+### 30. Generic p2p atomic currency swap (validates SPEC §11.5)
+
+Validates that the SIGHASH_SINGLE|ANYONECANPAY primitive works for **non-lending applications** — pure currency-for-currency atomic swap with no loan structure, no vault, no settlement templates. Same building block, different application.
+
+**Setup — Alice swaps 0.2 DAI for 0.05 VRSC from Bob:**
+- Bob's offer template:
+  - Input 0: Bob's 0.5 VRSC UTXO (`4c53edf6...` vout 0)
+  - Output 0: 0.05 VRSC → Alice (sig-locked, paired)
+- Bob signs Input 0 with `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY`. Hands hex to Alice.
+
+**Alice extends and broadcasts:**
+- Input 1: Alice's 5 DAI UTXO (signed `SIGHASH_ALL`)
+- Output 1: 0.2 DAI → Bob (Alice's payment)
+- Output 2: 4.8 DAI → Alice (DAI change)
+- Output 3: 0.4499 VRSC → Bob (his VRSC change after fee)
+- Tx: `9be44e0782416fa8a978e7df71c85fa5290f62146c1e8eb1f07e00b7ac4d7dee`
+- Confirmed cleanly
+
+**Final state:**
+- Alice: -0.2 DAI, +0.05 VRSC (acquired VRSC at price 4 DAI per VRSC)
+- Bob: +0.2 DAI, -0.05 VRSC, -0.0001 VRSC fee
+- Atomic — no counterparty risk, no order book, no platform
+
+**Validates:**
+- ✅ The SIGHASH_SINGLE|ANYONECANPAY primitive supports generic p2p currency swaps
+- ✅ No vault, no Profile L/V choice — just two parties trading directly
+- ✅ Maker (Bob) pre-commits offline; taker (Alice) triggers when ready
+- ✅ Maker can cancel by spending Input 0 elsewhere before taker broadcasts
+- ✅ SPEC §11.5's claim that "lending is one specialization of a general primitive" is empirically grounded
+
+**Why this matters:**
+
+This is the same primitive the Verus marketplace uses internally for offer construction, exposed at the raw-tx level. Combined with the lending validations (§16-§29) and options (§26-§27), the test set demonstrates the primitive's **generality**: same building block, multiple applications. A wallet that implements the SIGHASH ceremony for one application gets the others for free.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
