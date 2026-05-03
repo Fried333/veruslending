@@ -851,6 +851,116 @@ This collapses several "wallet UX problems" the spec currently flags into "use t
 
 ---
 
+## 14. Marketplace as a chain-native data layer
+
+Combined with §13 (reputation) and §13.1 (encrypted multimap), the contentmultimap functions as a fully decentralized data layer for a lending marketplace. **No platform operator. No user accounts beyond VerusIDs. No matching engine. Just standardized entries that any explorer or wallet can read.**
+
+### Standardized entry types
+
+```
+vrsc::loan.offer.v1     — lender publishes terms they'll lend at
+vrsc::loan.request.v1   — borrower publishes terms they need
+vrsc::loan.history.v1   — co-signed loan outcomes (§13)
+vrsc::loan.status.v1    — active loan state, public
+```
+
+Each is a standardized JSON payload under a canonical VDXF key. Wallets write to their owner's multimap when posting; readers query any VerusID for these keys.
+
+### Lender offer entry
+
+```json
+{
+  "loan.offer.v1": {
+    "version": 1,
+    "principal_currency": "<currency-id>",
+    "principal_amount": <amount>,
+    "collateral_currency": "<currency-id>",
+    "collateral_min_amount": <amount>,
+    "interest_rate": <fraction>,
+    "term_days": <number>,
+    "lender_broadcast_address": "<R-address-or-i-address>",
+    "lender_pubkey": "<compressed-hex>",
+    "active": true | false,
+    "valid_until_block": <number>
+  }
+}
+```
+
+### Borrower request entry
+
+```json
+{
+  "loan.request.v1": {
+    "version": 1,
+    "principal_currency_wanted": "<currency-id>",
+    "principal_amount_min": <amount>,
+    "principal_amount_max": <amount>,
+    "collateral_currency_offered": "<currency-id>",
+    "collateral_amount_max": <amount>,
+    "term_days_max": <number>,
+    "interest_rate_max": <fraction>,
+    "borrower_pubkey": "<compressed-hex>",
+    "active": true | false
+  }
+}
+```
+
+### What an explorer shows
+
+A page like `/lending/offers` queries all known VerusIDs (or a filtered subset) for `loan.offer.v1` entries and renders:
+
+| Lender ID | Principal | Collateral | LTV | Rate | Term | Track Record |
+|---|---|---|---|---|---|---|
+| `bob.lender@` | 5 DAI | 10 VRSC | 50% | 10% | 30d | 47 settled / 2 defaulted |
+| `desk.lendingco@` | 1000 DAI | 2000 VRSC | 50% | 8% | 90d | 312 settled / 5 defaulted |
+| ... | ... | ... | ... | ... | ... | ... |
+
+Symmetric `/lending/requests` page for borrowers seeking loans.
+
+Track record is computed from the lender's `loan.history.v1` entries — non-forgeable because each entry is co-signed by the counterparty at the loan's outcome (§13).
+
+### Match → ceremony
+
+Once a borrower picks an offer:
+
+1. Borrower's wallet writes `loan.accept.v1` to their own multimap, encrypted to the lender's z-key (per §13.1)
+2. Lender's wallet polls and finds the acceptance, decrypts, validates terms
+3. Cooperative origination ceremony proceeds via additional encrypted multimap entries (`loan.tx-o.draft.v1`, etc.)
+4. Tx-O broadcast atomically when borrower triggers
+5. Loan is now active; settlement templates stored encrypted on each party's multimap (§13.1)
+
+All ceremony coordination happens on chain. No off-chain server required.
+
+### Properties this gives you
+
+- **No platform.** Anyone can run an explorer with these queries. Multiple competing explorers with different ranking/filtering. Users can also query directly from a wallet without any explorer.
+- **Censorship-resistant.** No single party can deplatform a lender or borrower. The data lives on chain.
+- **Reputation-aware out of the box.** Track record is cryptographically attested via §13 co-signed entries.
+- **Native private DMs.** Encrypted multimap entries handle matchmaking and ceremony coordination without an off-chain message bus.
+- **No tokens, no protocol fees.** Just chain miner fees per multimap update tx (~0.0001 VRSC each).
+- **Settlement is the existing protocol.** The marketplace is purely a discovery and coordination layer above the cryptographic core.
+
+### What's needed to ship this
+
+| Component | Status |
+|---|---|
+| Multimap entries supported by Verus | ✅ exists |
+| VDXF key registry conventions | ✅ exists |
+| Standard schema for `loan.offer.v1` etc. | ❌ needs canonical definition (future PR) |
+| Explorer query / aggregation logic | ❌ application work (explorer teams) |
+| Wallet UI for entries + ceremony | ❌ reference wallet work |
+| Reputation scoring algorithm | ❌ optional — each wallet/explorer can implement its own |
+
+The chain provides the data layer. Everything above is application work that does not require Verus core changes.
+
+### What this enables structurally
+
+Today's framing in the README — "What it is NOT for: lending to anonymous strangers without external trust mechanisms" — relaxes substantially when the marketplace + reputation layer is in place. **Strangers with track records become acceptable counterparties at appropriate rates.** The protocol's practical envelope expands from "private agreements between two known parties" to "permissionless capital market with cryptographic credit identity."
+
+This is the same shift Bitcoin made: from "money for known parties" to "permissionless money." Bitcoin needed PoW + UTXO. Lending needs SIGHASH_SINGLE|ANYONECANPAY pre-commitment + multimap-based reputation. Both are existing primitives; the work is composition.
+
+---
+
 ## Appendix A: Glossary
 
 - **R-address**: Verus's standard transparent address, single-sig public key hash. Prefix `R`.
