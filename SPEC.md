@@ -1,8 +1,15 @@
 # VerusLending — Protocol Specification
 
-**Status:** Draft v0.4 — empirically validated on Verus mainnet
+**Status:** Draft v0.5 — empirically validated on Verus mainnet (24 distinct test scenarios)
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
+
+**v0.5 changes:**
+- Loan-ID can be a 2-of-2 p2sh script *or* a VerusID — both validated on mainnet (§2)
+- Cross-currency loans validated (e.g. VRSC collateral + DAI principal) — §3 outputs use Verus reserve-transfer encoding
+- Tx-B can use the same `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` discipline as Tx-Repay, enabling broadcaster-pays-fee for the default path (§3, §6)
+- Tx-C rescue path validated on mainnet (§6.5)
+- Output-tampering rejection confirmed on mainnet (§7)
 
 A peer-to-peer collateralized credit protocol built from existing VerusID and pre-signed transaction primitives. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all happy-path and most failure-mode outcomes. No arbiter. No committee. No third-party intermediary. No discretionary recovery authority. No panic button. The lender pre-commits to accepting repayment at origination and cannot retract; the borrower can settle unilaterally at any time during the loan term.
 
@@ -47,7 +54,22 @@ Both roles are private parties. They identify each other off-chain; the protocol
 
 ## 2. Loan-ID structure
 
-Each loan has exactly one `Loan-ID` — a Verus sub-ID with these properties:
+Each loan has exactly one `Loan-ID` — a 2-of-2 multisig holding the collateral. Two equivalent flavors are supported:
+
+### 2.1 Profile L (lite, p2sh) — minimal-overhead
+
+The Loan-ID is a 2-of-2 p2sh script derived from both parties' compressed pubkeys:
+
+```
+redeem_script = OP_2 <borrower_pubkey> <lender_pubkey> OP_2 OP_CHECKMULTISIG
+Loan-ID address = base58(0x55 || ripemd160(sha256(redeem_script)) || checksum)
+```
+
+No on-chain registration step. No fee. Both parties simply exchange pubkeys, derive the address deterministically, and proceed to Tx-A. Validated on mainnet — see TESTING.md §18–§24.
+
+### 2.2 Profile V (verusid) — richer UX
+
+The Loan-ID is a Verus sub-ID with these properties:
 
 ```
 Loan-ID
@@ -58,13 +80,27 @@ Loan-ID
   timelock:            0
 ```
 
-### Authority semantics
+Profile V adds: human-readable name (`loan-XXXX.parent@`), on-chain encrypted multimap entries (e.g. for hex-backup of pre-signed transactions), reputation hooks. Cost: sub-ID registration fee (~0.1 VRSC if the parent already exists) or 100 VRSC for a fresh top-level. Validated on mainnet — see TESTING.md §16, §17.
+
+### Authority semantics (Profile V only)
 
 - **Primary (2-of-2)**: Both parties must cosign any normal `updateidentity` action. Neither can spend or update unilaterally.
 - **Revocation**: null. No party can unilaterally freeze the loan. The protocol provides no panic-button mechanism — and doesn't need one, because the lender cannot stonewall.
 - **Recovery**: null. No discretionary recovery path. The Loan-ID's collateral can only leave the i-address via one of the three pre-signed transactions described in §3.
 
-This is intentional. With Tx-Repay (§3) providing the lender's irrevocable pre-commitment to accept repayment, there's no scenario where revocation/recovery would be load-bearing for the canonical design. Removing them eliminates the malicious-revoke attack surface entirely.
+For Profile L, the equivalent semantics are inherent to p2sh: the script has no concept of revoke/recover. Funds can only be released by 2-of-2 sig.
+
+### Choosing a profile
+
+| Use case | Recommended profile |
+|---|---|
+| Ad-hoc loan between two strangers / informal parties | L |
+| Lending desk doing many loans | V (share parent) |
+| Community lending facility issuing loan-IDs as a service | V |
+| Any case where on-chain encrypted hex-backup matters for UX | V |
+| Minimal overhead, parties already know each other off-chain | L |
+
+The protocol's cryptographic guarantees are identical between profiles. The choice is operational (naming, fees, ID infrastructure), not security.
 
 ---
 
@@ -72,9 +108,9 @@ This is intentional. With Tx-Repay (§3) providing the lender's irrevocable pre-
 
 Three transactions are constructed and signed at origination. One is broadcast immediately; two are held off-chain.
 
-### Tx-A: Origination (broadcast at origination)
+### Tx-A: Origination — two patterns
 
-A multi-input, multi-output raw transaction signed by both parties:
+**Pattern A1 — cooperative raw tx (v0.4 canonical, both parties online together):**
 
 ```
 Inputs:
@@ -82,12 +118,32 @@ Inputs:
   - Lender's UTXO covering principal + share of fee
 
 Outputs:
-  - Loan-ID's i-address ← collateral amount
+  - Loan-ID address ← collateral amount
   - Borrower's R-address ← principal amount
   - (change outputs as needed)
 ```
 
-Both parties sign their respective inputs via standard `signrawtransaction`. The Loan-ID is registered in the same tx (or a coordinated companion tx; see §4 for ceremony details).
+Both parties sign their respective inputs via standard `signrawtransaction`. Validated mainnet §16, §18.
+
+**Pattern A2 — atomic-swap origination (Tx-O), async, recommended for v0.5+:**
+
+Mirrors Tx-Repay's signature discipline. Lender pre-commits offline; borrower triggers when ready.
+
+```
+Pre-signed by LENDER at offer time:
+  Input 0:  Lender's principal UTXO    (signed SIGHASH_SINGLE | ANYONECANPAY)
+  Output 0: principal amount → borrower's R-address  (sig-locked, paired with Input 0)
+
+At broadcast (BORROWER appends and signs):
+  Input 1:  Borrower's collateral UTXO  (signed SIGHASH_ALL)
+  Output 1: collateral → Loan-ID address
+  Output 2: borrower's change
+  Output 3: lender's change (if needed)
+```
+
+Same SIGHASH discipline as Tx-Repay. Lender can withdraw the offer before takeup by spending Input 0 elsewhere (just like a marketplace offer). Borrower triggers the loan unilaterally when conditions are favorable.
+
+Either pattern produces an identical post-confirmation state: collateral at Loan-ID, principal at borrower's R-address. Choose A1 for synchronous-ceremony loans, A2 for async / offer-board UX.
 
 ### Tx-Repay: Pre-signed repayment template (held off-chain by borrower)
 
@@ -125,16 +181,31 @@ The lender's pre-commitment is bounded to "I'll release the collateral if exactl
 
 ### Tx-B: Lender's default-claim (held off-chain by lender)
 
-Fallback if borrower doesn't broadcast Tx-Repay before maturity.
+Fallback if borrower doesn't broadcast Tx-Repay before maturity. Two variants:
 
+**Variant B-α — collateral-pays-fee (simpler):**
 ```
-Input:  Loan-ID i-address collateral UTXO (same UTXO as Tx-Repay references)
-Output: collateral → lender's R-address (less fee)
+Input:  Loan-ID collateral UTXO (same UTXO as Tx-Repay references)
+        Both parties sign with SIGHASH_ALL
+Output: collateral_amount - fee → lender (e.g. 9.9999 from 10 VRSC collateral)
 nLockTime: maturity_block + grace_period (e.g., +30 days)
-Signatures: 2-of-2 [borrower, lender], SIGHASH_ALL, signed at origination
 ```
 
-Lender broadcasts Tx-B at maturity + grace if the borrower hasn't broadcast Tx-Repay. Cannot be broadcast before nLockTime. Once broadcast, the collateral UTXO is consumed and Tx-Repay/Tx-C are invalidated.
+Lender's claim is reduced by the miner fee. Simple, but eats into the recovered amount.
+
+**Variant B-β — broadcaster-pays-fee (symmetric, validated mainnet §21):**
+```
+Input 0: Loan-ID collateral UTXO
+         Both parties sign with SIGHASH_SINGLE | SIGHASH_ANYONECANPAY
+Output 0: full collateral_amount → lender (sig-locked)
+nLockTime: maturity_block + grace_period
+```
+
+At broadcast time, lender extends with their own VRSC fee input + change output (signed with SIGHASH_ALL on the new input). Collateral is recovered exactly. Same SIGHASH discipline as Tx-Repay — fully symmetric protocol.
+
+For non-VRSC collateral (e.g. tBTC.vETH), variant B-β is required because there's no VRSC in the collateral UTXO to deduct fee from.
+
+Either way: cannot be broadcast before nLockTime. Once broadcast, the collateral UTXO is consumed and Tx-Repay/Tx-C are invalidated.
 
 ### Tx-C: Borrower's last-resort rescue (optional — held off-chain by borrower)
 
@@ -280,6 +351,32 @@ If borrower doesn't have funds to repay early, this is essentially a forced defa
 ### 6.5 Both parties die / lose keys simultaneously
 
 Funds locked on chain. Heirs may eventually find the off-chain pre-signed transactions and broadcast them. If not, collateral is permanently inaccessible. Acceptable trade-off — the protocol is not responsible for inheritance.
+
+### 6.6 Chain reorganizations
+
+The protocol is **inherently reorg-resilient**: pre-signed transactions don't depend on chain state for their validity (only on UTXO availability and locktime). A reorg simply means "rebroadcast and try again." There is no scenario where a reorg can cause a party to lose value.
+
+| Reorg scenario | Recovery | Risk |
+|---|---|---|
+| Tx-O / Tx-A reorged before confirmation | Wallet rebroadcasts; OR either party spends their input elsewhere to cancel (loan never happens) | None — both parties whole |
+| Tx-Repay reorged after broadcast | Borrower's wallet rebroadcasts; tx still valid | None — Tx-Repay's `expiryheight ≤ maturity` blocks broadcasts after the deadline anyway |
+| Tx-B reorged after broadcast | Lender's wallet rebroadcasts; tx still valid (locktime satisfied) | None — borrower can't broadcast Tx-Repay across maturity if expiryheight set correctly |
+| Tx-C reorged after broadcast | Borrower's wallet rebroadcasts; far-future locktime makes contention implausible | None |
+
+**Lender's default-claim procedure (recommended):**
+
+```
+1. At maturity + grace, broadcast Tx-B
+2. Wait for ≥ 6 confirmations (~6 minutes on Verus) before treating the claim as final
+3. If a reorg knocks Tx-B out, wallet detects and rebroadcasts immediately
+4. After 10 confirmations, finality is essentially guaranteed (Verus has notarization)
+```
+
+**Why no double-cliam attack via reorg is possible:**
+
+If Tx-B confirms in block N and gets reorged out, the only competing settlement would be Tx-Repay. But Tx-Repay's `expiryheight = maturity_block` makes it invalid at any height ≥ maturity. So borrower can't "race" Tx-Repay during the reorg window — the network rejects it as expired.
+
+The only adversarial reorg scenario the protocol can't defend against is a deep (>10-block) reorg that simultaneously affects both Tx-B and the chain's notion of "what's the maturity block." On Verus, with ~1-min blocks and notarization, this is implausible. For high-stakes loans, lender can simply wait longer (e.g. 100 confirmations).
 
 ---
 
