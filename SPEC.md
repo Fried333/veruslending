@@ -701,7 +701,45 @@ The minimal mechanic — premium paid upfront, underlying locked at 2-of-2 vault
 - **SIGHASH_ANYONECANPAY**: Modifier; signature covers only its own input (other inputs can be added/changed).
 - **SIGHASH_SINGLE | SIGHASH_ANYONECANPAY**: Combined; signature covers only its own input + the output at the same index. The protocol's foundational primitive — used in Tx-O, Tx-Repay, Tx-B, and Tx-C alike.
 
-## Appendix B: Profile V vs Profile L feature comparison
+## Appendix B: Shielded variants (one-sided privacy with z-addresses)
+
+Verus inherits Sapling z-address shielded transactions from Zcash. The protocol's transparent-side primitive cannot be ported wholesale to shielded form (Sapling doesn't expose per-input partial signing or shielded multisig), but **one-sided privacy** is achievable with no changes to the spec — only wallet UX.
+
+### What works
+
+A Verus tx can mix transparent and shielded inputs/outputs. The transparent inputs continue to use SIGHASH flags as in §3, and the sighash computation per ZIP-0243 includes shielded portion commitments — so pre-signing remains valid.
+
+| Variant | What's private | Mechanism |
+|---|---|---|
+| Lender receives privately | lender's identity, repayment amount as known to outside observers | Tx-Repay's Output 0 is a shielded output to lender's z-address |
+| Borrower funds privately | source of borrower's principal repayment | Tx-Repay's Input 1+ are shielded spends |
+| Premium paid privately | source of buyer's premium funds | premium tx is z→z or t→z |
+| Strike paid privately | source of buyer's strike at exercise | exercise tx Input 1 is shielded spend |
+
+In each case the SIGHASH_SINGLE|ANYONECANPAY pre-commit on the transparent vault input still works — the lender's signature commits to the *commitment* of the shielded output, and the chain enforces that the commitment can't be changed without invalidating the signature.
+
+### What doesn't work
+
+| Wanted | Why it doesn't work |
+|---|---|
+| Shielded vault | Sapling has no native multisig — can't have a 2-of-2 shielded address holding collateral |
+| Pre-signed shielded settlement template | Shielded portions are proven monolithically; can't be partially constructed and extended later |
+| Hidden loan amounts at the vault | The vault is a transparent address; its UTXO value is public. The amount can be hidden only at the *inflows* and *outflows*, not at the vault itself |
+| Fully bilateral privacy | Vault must be transparent → its state is public, even if endpoint identities are shielded |
+
+### Recommended use
+
+For loans where party identity is sensitive (e.g. private business agreements, OTC desks not wanting to broadcast counterparty list), Profile L + shielded recipient outputs gives meaningful privacy. The vault address and loan amount become observable, but who's lending to whom doesn't.
+
+For full bilateral privacy, wait for a shielded-multisig primitive (potentially via Verus's PBaaS roadmap, Orchard/Halo2 successor schemes, or BLS-based aggregation). Track as v0.6+ direction.
+
+### Not validated on mainnet
+
+The shielded-recipient variant should "just work" given that Sapling/transparent mixing is supported and SIGHASH semantics are well-defined per ZIP-0243. Not directly tested on mainnet during this spec's development. Worth a follow-up validation when the shielded UX is built.
+
+---
+
+## Appendix C: Profile V vs Profile L feature comparison
 
 | Feature | Profile L (p2sh) | Profile V (VerusID) |
 |---|---|---|
