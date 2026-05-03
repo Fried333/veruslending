@@ -36,6 +36,7 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 | Pre-locktime broadcast rejection (`64: non-final`) | ✅ validated for both VerusID and p2sh |
 | Tx-Repay broadcast invalidates pre-signed Tx-B (UTXO consumption) | ✅ validated |
 | Output 0 tampering (recipient or amount change) rejected | ✅ validated — `mandatory-script-verify-flag-failed` |
+| **Options primitive: pre-paid premium + atomic exercise + expiryheight** | ✅ validated on mainnet (TESTING.md §26) |
 | Front-run protection (no offer ever in mempool) | ✅ structural |
 
 See [TESTING.md](./TESTING.md) for txid references and [SCENARIOS.md](./SCENARIOS.md) for the full scenario test matrix.

@@ -1,6 +1,6 @@
 # VerusLending — Protocol Specification
 
-**Status:** Draft v0.5 — empirically validated on Verus mainnet (25 distinct test scenarios)
+**Status:** Draft v0.5 — empirically validated on Verus mainnet (26 distinct test scenarios, including options market mechanic)
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
@@ -663,6 +663,10 @@ Buyer can also resell the option to another party using the same atomic-transfer
 
 - Not a substitute for a CEX with margin / leverage / liquidation. This is **fully-collateralized** options only. Writer must lock the underlying (call) or strike-cash (put) for the duration.
 - Not an oracle-dependent settlement. Settlement is pure delivery: exercise = exchange of underlying for strike, no oracle needed.
+
+### Mainnet validation
+
+The minimal mechanic — premium paid upfront, underlying locked at 2-of-2 vault, cooperative pre-sign of exercise tx with `expiryheight`, atomic exercise by buyer — is validated on Verus mainnet. See TESTING.md §26 for txids and full procedure.
 
 ---
 

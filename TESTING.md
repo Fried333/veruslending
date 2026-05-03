@@ -476,6 +476,61 @@ This makes the protocol fully symmetric across all four phases. The same SIGHASH
 
 Origination ceremony is no longer a synchronous-online event. It can be: lender posts offer → borrower takes when ready → loan exists. Same UX as a marketplace listing.
 
+### 26. Options primitive — pre-paid premium + atomic exercise + expiryheight
+
+First mainnet validation of the options-market mechanic described in SPEC.md §11.6. Same SIGHASH_SINGLE|ANYONECANPAY primitive as Tx-O / Tx-Repay, but with `expiryheight` instead of `nLockTime` to gate the EXERCISE WINDOW from above (rather than below).
+
+**Setup — call option:**
+- Writer: Bob (RHze on .44)
+- Buyer: Alice (RJ6Xejo locally)
+- Underlying: 1 VRSC
+- Strike: 1 DAI
+- Premium: 0.1 DAI (paid upfront)
+- Expiration: block 4050321 (current+10 at exercise time)
+
+**Phase 1 — Premium payment (Alice → Bob, paid first):**
+- Tx: `70ccdbfea6df5a9ccd36c48593cd000e903c761dd420ef014860153afb859d87`
+- 0.1 DAI from Alice to Bob via standard `sendcurrency`
+- Validates: pay-first model is just a regular tx; no new mechanic needed for premium leg
+
+**Phase 2 — Underlying lock (Bob → vault):**
+- Tx: `97d720403011d6a5c205a238dedab45455aa4f73d4580f7e14dfcd767e258f55`
+- 1 VRSC from Bob to p2sh vault (vout 1)
+- Underlying now locked at 2-of-2 — neither party can spend unilaterally
+
+**Phase 3 — Cooperative pre-sign of exercise tx:**
+- Input 0: vault's 1 VRSC UTXO (signed `SIGHASH_SINGLE | ANYONECANPAY` by both Alice and Bob)
+- Output 0: 1 DAI → Bob (sig-locked, the strike payment)
+- expiryheight: 4050321 (block beyond which exercise tx is invalid)
+- Resulting hex (758 bytes) held by Alice (the buyer)
+
+**Phase 4 — Exercise (Alice broadcasts before expiration):**
+- Alice extended template: added Input 1 (her 1 DAI strike) and Output 1 (0.9999 VRSC underlying receipt)
+- Signed Input 1 with `SIGHASH_ALL`
+- Tx: `f48ba0c3b39aa3b6d414fbe06a81ac65c3205687d096ef5080ce8ea34a79f39c`
+- Block 4050311 (10 blocks before expiry)
+- Confirmed in block `0000000000004a0c454c36fab2a0ab33147d42bc1c619303e8b6c795d55fb40c`
+
+**Final state:**
+- Vault (p2sh): underlying consumed
+- Bob (writer): +1 DAI strike (sig-locked Output 0) + 0.1 DAI premium (already received in Phase 1) = +1.1 DAI net
+- Alice (buyer): -1 DAI strike, +0.9999 VRSC underlying, -0.1 DAI premium = net acquired 0.9999 VRSC at effective price 1.1 DAI
+- Fee: 0.0001 VRSC (deducted from underlying)
+
+**Validates:**
+- ✅ Pay-first premium model works as a separate `sendcurrency` (no special chain mechanic needed)
+- ✅ Underlying lock at 2-of-2 vault prevents writer rug-pull during the option window
+- ✅ Cooperative pre-signed exercise tx with `expiryheight` enforces the expiration window
+- ✅ Buyer-triggered atomic exercise (strike-for-underlying in one tx)
+- ✅ Same SIGHASH_SINGLE|ANYONECANPAY primitive as the lending protocol — fully reusable
+- ✅ Output 0 sig-lock prevents buyer from underpaying the strike (same protection as Tx-Repay D2 §24)
+
+**Why this matters:**
+
+The options primitive is **the same building block as the loan primitive, with `expiryheight` substituted for `nLockTime`.** A wallet that supports VerusLending can support options markets with no new chain mechanics — just different parameters in the same ceremony. Verus already has fully-collateralized, oracle-free, custodian-free options today. The only missing piece is wallet UX.
+
+After expiration (block ≥ 4050321), the exercise tx becomes unbroadcastable (`tx-expiring-soon` rejection — already validated in §F1 cleanup). Writer's separate "underlying-return" tx with `nLockTime = expiration+1` recovers the underlying. (Underlying-return path validated by extension; same nLockTime mechanic as Tx-B in §17, §19, §21.)
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
