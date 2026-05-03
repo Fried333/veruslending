@@ -1,6 +1,6 @@
 # VerusLending — Protocol Specification
 
-**Status:** Draft v0.5 — empirically validated on Verus mainnet (32 distinct test scenarios — full lending lifecycle, options market, generic p2p atomic swap, i-address recipient, double-spend rejection in both directions, non-VRSC collateral)
+**Status:** Draft v0.5 — empirically validated on Verus mainnet (33 distinct test scenarios — full lending lifecycle, options market, generic p2p atomic swap, i-address recipient, double-spend rejection in both directions, non-VRSC collateral, **marketplace data layer**)
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 

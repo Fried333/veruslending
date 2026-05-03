@@ -756,6 +756,52 @@ Setup: same vault `i6ebrehQ6dyJGjy8LoxkaPfJ2Vo7dXGbHy` (2-of-2 [Alice, Bob], nul
 - §31's earlier "VRSC-only collateral" recommendation reversed
 - The clean position is now: **any Verus currency works as collateral if using Profile V vault**
 
+### 33. Marketplace data layer — loan offer published & cross-node readable
+
+Demonstrates that the **chain itself is the marketplace**. A loan offer is a `loan.offer.v1` entry in a VerusID's contentmultimap. Anyone with a Verus node can read it via `getidentity` — no server, no API, no centralized index needed.
+
+**Setup:**
+- VDXF key for `loan.offer.v1`: `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy` (generated via `getvdxfid "loan.offer.v1"`; namespace defaults to VRSC chain)
+- Test ID: `i44CxABWkVnUhoPMjuM2ViJDDu2icd7jg7` (a controllable VerusID with empty multimap, primary RUd7fPjUYj27qTjamieXAYiJ2NcSVCBekF)
+
+**Offer payload (hex-encoded JSON in the multimap entry):**
+```json
+{
+  "version": 1,
+  "type": "lend",
+  "principal": {"currency": "VRSC", "amount": 5},
+  "collateral": {"currency": "VRSC", "amount": 10},
+  "rate": 0.10,
+  "term_days": 30,
+  "lender_pubkey": "0270b46dc0dcfe28b35cbd76ba54c5560c88b64b80ebc3cf515b7035b0891c8250",
+  "lender_address": "RHze1kkgaWkLzXtu3wB8kAN6UJe7GLzqG8",
+  "valid_until_block": 4070000,
+  "active": true
+}
+```
+
+**Write to chain:**
+- `updateidentity` with `contentmultimap = { "<vdxf_id>": ["<hex_blob>"] }`
+- Tx: `694ed5cfc13d4fb0234d7fa2759a336b163c59b42ee0b71581ff816062bb00a8`
+- Confirmed cleanly
+
+**Cross-node readability validation:**
+- Read from local node: ✅ same JSON returned
+- Read from .44 (independent node, different physical location): ✅ same JSON returned
+
+**Validates:**
+- ✅ The contentmultimap is the marketplace data layer — no separate server required
+- ✅ Anyone with a Verus node can discover offers via `getidentity`
+- ✅ VDXF keys provide canonical schema addressing (anyone computing `getvdxfid "loan.offer.v1"` gets the same key)
+- ✅ Hex-encoded JSON in the multimap entry is the simplest viable encoding
+- ✅ Offers are public, queryable, censorship-resistant
+
+**What this means architecturally:**
+
+The protocol doesn't need a marketplace operator. The **explorer's role is rendering, not gatekeeping** — every wallet can implement its own discovery/filtering on top of the same chain data. Any explorer, marketplace, or wallet can show the same set of offers because they're all reading from the same chain.
+
+Combined with §13 (reputation) and §13.1 (encrypted multimap), the protocol's full lifecycle — discovery, ceremony coordination, settlement, reputation — runs entirely on chain. No off-chain infrastructure required.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
