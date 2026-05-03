@@ -45,7 +45,7 @@ No local database. Server is pure plumbing.
 
 - Status bar: pings `getinfo` to show chain tip
 - Marketplace: walks wallet-local children of a parent ID, decodes
-  `loan.offer.v1` multimap entries
+  `vrsc::contract.loan.offer` multimap entries
 - Settings: store your VerusID / R-address / pubkey for use later
 
 ## What's next

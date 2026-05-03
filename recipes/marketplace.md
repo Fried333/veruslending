@@ -18,17 +18,17 @@ No platform operator. No matching engine. No API. Just `getidentity` and `update
 
 ## What the protocol provides
 
-Standard VDXF keys for marketplace entries:
+Standard VDXF keys for marketplace entries (full registry in [SCHEMA.md](../SCHEMA.md)):
 
-| Key (string) | VDXF id | Purpose |
+| Key | VDXF id | Purpose |
 |---|---|---|
-| `loan.offer.v1` | `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy` | Lender publishes terms |
-| `loan.request.v1` | (compute via `getvdxfid`) | Borrower publishes terms |
-| `loan.history.v1` | (compute via `getvdxfid`) | Outcome attestations (reputation) |
-| `loan.status.v1` | (compute via `getvdxfid`) | Active loan state |
-| `loan.accept.v1` | (compute via `getvdxfid`) | Borrower's acceptance (encrypted) |
+| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | Lender publishes terms |
+| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | Borrower publishes terms |
+| `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | Outcome attestations (reputation) |
+| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | Active loan state |
+| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | Borrower's acceptance (encrypted) |
 
-For options, escrow, swaps — define equivalent keys (`option.offer.v1`, `escrow.offer.v1`, etc.) following the same pattern.
+Equivalent keys exist for options / escrow / swap (`vrsc::contract.option.offer`, `vrsc::contract.escrow.offer`, `vrsc::contract.swap.offer` etc). All use the same `vrsc::contract.<usecase>.<entity>` convention. See SCHEMA.md for the full set.
 
 ## What the user does
 
@@ -69,8 +69,8 @@ OFFER_HEX=$(echo -n "$OFFER_JSON" | python3 -c "import sys; print(sys.stdin.read
 ### Step 3 — Get the VDXF key
 
 ```bash
-verus getvdxfid "loan.offer.v1"
-# Returns: {"vdxfid":"iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy", ...}
+verus getvdxfid "vrsc::contract.loan.offer"
+# Returns: {"vdxfid":"iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY", ...}
 ```
 
 The VDXF id is deterministic; everyone computing it gets the same result.
@@ -78,7 +78,7 @@ The VDXF id is deterministic; everyone computing it gets the same result.
 ### Step 4 — Write to your VerusID's multimap
 
 ```bash
-VDXF_KEY=iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy
+VDXF_KEY=iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY
 
 verus updateidentity "{
   \"name\": \"<your_id_name>\",
@@ -100,7 +100,7 @@ From any Verus node, anywhere:
 verus getidentity "<your_id>" | jq '.identity.contentmultimap'
 # Returns:
 # {
-#   "iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy": [
+#   "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY": [
 #     "7b2276657273696f6e..."   # hex-encoded JSON
 #   ]
 # }
@@ -136,7 +136,7 @@ After a loan settles, both parties write a history entry to their own multimap. 
 }
 ```
 
-Same `updateidentity` flow as above, with VDXF key for `loan.history.v1`.
+Same `updateidentity` flow as above, with VDXF key for `vrsc::contract.loan.history`.
 
 ---
 
@@ -157,9 +157,9 @@ Same `updateidentity` flow as above, with VDXF key for `loan.history.v1`.
 ```
 
 The wallet:
-1. Queries known/discovered VerusIDs for `loan.offer.v1` (or `option.offer.v1`, etc.)
+1. Queries known/discovered VerusIDs for `vrsc::contract.loan.offer` (or `vrsc::contract.option.offer`, etc.)
 2. Decodes hex JSON
-3. Aggregates each lender's `loan.history.v1` entries → reputation summary
+3. Aggregates each lender's `vrsc::contract.loan.history` entries → reputation summary
 4. Renders with filtering/sorting
 5. On "Accept", initiates the cooperative ceremony (more multimap writes, encrypted)
 
@@ -174,7 +174,7 @@ For a wallet implementing this, the work is:
 
 ### Pattern A — walk all VerusIDs (doesn't scale)
 
-You can't easily query "all VerusIDs with a `loan.offer.v1` entry." Verus's `listidentities` returns local wallet IDs only.
+You can't easily query "all VerusIDs with a `vrsc::contract.loan.offer` entry." Verus's `listidentities` returns local wallet IDs only.
 
 ### Pattern B — known parent ID convention
 
@@ -195,12 +195,12 @@ Block explorers index the chain for `updateidentity` calls with marketplace-rele
 
 ## Encrypted multimap entries
 
-Some entries are public (`loan.offer.v1`); others should be encrypted (acceptance, ceremony coordination, settlement templates).
+Some entries are public (`vrsc::contract.loan.offer`); others should be encrypted (acceptance, ceremony coordination, settlement templates).
 
 ### Public entries
 
 ```json
-{ "loan.offer.v1": ["<hex of JSON>"] }
+{ "vrsc::contract.loan.offer": ["<hex of JSON>"] }
 ```
 
 Anyone can decode. Use for offers, requests, public history.

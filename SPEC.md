@@ -478,15 +478,15 @@ The contentmultimap of a VerusID functions as a chain-native marketplace data la
 
 ### Validated end-to-end: §33
 
-A loan offer was published as a `loan.offer.v1` entry in a VerusID's contentmultimap and read back identically from two independent Verus nodes (local + .44 in different physical locations). Tx: `694ed5cfc13d4fb0234d7fa2759a336b163c59b42ee0b71581ff816062bb00a8`.
+A loan offer was published as a multimap entry in a VerusID's contentmultimap (under an early-draft VDXF key `vrsc::loan.offer.v1` = `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy`) and read back identically from two independent Verus nodes (local + .44 in different physical locations). Tx: `694ed5cfc13d4fb0234d7fa2759a336b163c59b42ee0b71581ff816062bb00a8`. The canonical key set has since been finalised in [SCHEMA.md](./SCHEMA.md) under `vrsc::contract.*` — the early-draft key is no longer recognised.
 
 ### Standard entry types (Part II §12 defines canonical VDXF keys)
 
 ```
-loan.offer.v1     — lender publishes terms they'll lend at
-loan.request.v1   — borrower publishes terms they need
-loan.history.v1   — co-signed loan outcomes (§10)
-loan.status.v1    — active loan state (active, settled, defaulted, rescued)
+contract.loan.offer    — lender publishes terms they'll lend at
+contract.loan.request  — borrower publishes terms they need
+contract.loan.history  — co-signed loan outcomes (§10)
+contract.loan.status   — active loan state (active, settled, defaulted, rescued)
 ```
 
 Each is a hex-encoded JSON payload under a canonical VDXF key. Wallets write to their owner's multimap when posting; readers parse any VerusID's multimap for these keys.
@@ -525,14 +525,14 @@ Each is a hex-encoded JSON payload under a canonical VDXF key. Wallets write to 
 
 ### What an explorer or wallet can show
 
-A page like `/lending/offers` queries known VerusIDs (or a filtered subset) for `loan.offer.v1` entries and renders:
+A page like `/lending/offers` queries known VerusIDs (or a filtered subset) for `vrsc::contract.loan.offer` entries and renders:
 
 | Lender ID | Principal | Collateral | LTV | Rate | Term | Track Record |
 |---|---|---|---|---|---|---|
 | `bob.lender@` | 5 DAI | 10 VRSC | 50% | 10% | 30d | 47 settled / 2 defaulted |
 | `desk.lendingco@` | 1000 DAI | 2000 VRSC | 50% | 8% | 90d | 312 settled / 5 defaulted |
 
-Track record is computed from each lender's `loan.history.v1` entries (§10).
+Track record is computed from each lender's `vrsc::contract.loan.history` entries (§10).
 
 ### Discovery scaling
 
@@ -648,31 +648,30 @@ Terms can be encrypted, leaving public visibility only to "VerusID alice@ has an
 
 ## 12. VDXF schema registry
 
-VDXF (Verus Data Exchange Format) keys are derived deterministically from string identifiers via `getvdxfid`. Anyone computing `getvdxfid "loan.offer.v1"` gets the same canonical key.
+VDXF (Verus Data Exchange Format) keys are derived deterministically from string identifiers via `getvdxfid`. Anyone computing `getvdxfid "vrsc::contract.loan.offer"` gets the same canonical key.
 
-**Validated VDXF key (§33):** `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy` for `loan.offer.v1`.
+The canonical key set is namespaced under `vrsc::contract.<usecase>.<entity>` matching Verus's own convention (`vrsc::system.*`, `vrsc::profile.*`, `vrsc::contentmultimap.*`). Versioning lives inside the JSON payload (`{ "version": 1, … }`), not in the key string. See [SCHEMA.md](./SCHEMA.md) for the full registry including options / escrow / swap entries.
 
-### Canonical keys (v1)
+### Canonical keys (loan use case)
 
-| Identifier | VDXF key | Purpose |
-|---|---|---|
-| `loan.offer.v1` | `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy` | Lender's open offer |
-| `loan.request.v1` | (compute via `getvdxfid`) | Borrower's request |
-| `loan.history.v1` | (compute via `getvdxfid`) | Outcome attestations |
-| `loan.status.v1` | (compute via `getvdxfid`) | Active loan state |
-| `loan.accept.v1` | (compute via `getvdxfid`) | Borrower's acceptance (encrypted) |
-| `loan.tx-o.draft.v1` | (compute via `getvdxfid`) | Ceremony Tx-O draft (encrypted) |
-| `loan.tx-repay.template.v1` | (compute via `getvdxfid`) | Pre-signed Tx-Repay (encrypted) |
-| `loan.tx-b.template.v1` | (compute via `getvdxfid`) | Pre-signed Tx-B (encrypted) |
-| `loan.tx-c.template.v1` | (compute via `getvdxfid`) | Pre-signed Tx-C (encrypted) |
+| Key | VDXF id | Purpose | Visibility |
+|---|---|---|---|
+| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | Lender's open offer | public |
+| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | Borrower's request | public |
+| `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | Outcome attestation (reputation source) | public |
+| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | Active loan state | public |
+| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | Borrower's acceptance handshake | encrypted |
+| `vrsc::contract.loan.template`  | `i7HCaxjju3QRYmbC23g5QD2smMk4PqaXFq` | Pre-signed Tx-A draft + Tx-Repay + Tx-B + Tx-C templates, bundled | encrypted (to self) |
+
+VDXF ids above are deterministic — re-derive at any time via `verus getvdxfid "<key>"`.
 
 ### Versioning
 
-VDXF keys are immutable. Schema upgrades go via a new key (`loan.offer.v2`). Wallets supporting multiple versions read all and prefer the highest.
+VDXF keys are immutable. Schema upgrades happen via the `version` field inside the JSON payload, NOT by introducing a new key (`loan.offer.v2`). Readers handle multiple `version` values gracefully. This matches Verus's own convention — keys like `vrsc::system.currency.notarization` have stable ids while their payload schemas evolve.
 
 ### Encoding
 
-Each multimap entry value is a hex-encoded payload. For public entries: hex-encoded JSON. For encrypted entries: hex-encoded ciphertext (encryption format defined per Verus's existing identity z-key primitives).
+Each multimap entry value is a hex-encoded payload (`hex(utf8(JSON.stringify(payload)))`). For public entries: hex-encoded JSON. For encrypted entries: hex-encoded ciphertext (encryption format per Verus's existing identity z-key primitives).
 
 ---
 
@@ -682,8 +681,8 @@ Each multimap entry value is a hex-encoded payload. For public entries: hex-enco
 
 A reference wallet implementation should provide:
 
-1. **Marketplace browsing** — query VerusIDs for `loan.offer.v1` and `loan.request.v1` entries; render as a filterable list.
-2. **Reputation aggregation** — for any candidate counterparty, fetch their `loan.history.v1` entries and compute a summary (count, default rate, tenure, counterparty diversity).
+1. **Marketplace browsing** — query VerusIDs for `vrsc::contract.loan.offer` and `vrsc::contract.loan.request` entries; render as a filterable list.
+2. **Reputation aggregation** — for any candidate counterparty, fetch their `vrsc::contract.loan.history` entries and compute a summary (count, default rate, tenure, counterparty diversity).
 3. **Reputation gating** — let the user set thresholds (max default rate, min tenure, min loans). Hide or warn on offers below threshold.
 4. **Origination ceremony coordinator** — handle the multi-step signing dance via encrypted multimap writes; expose simple "Accept offer" UX.
 5. **Encrypted hex storage** — write pre-signed templates to user's own multimap as durable backup.
@@ -785,7 +784,7 @@ Each item below was directly tested on Verus mainnet. See [TESTING.md](./TESTING
 | Generality | Generic p2p atomic currency swap (no loan structure) | ✅ §30 |
 | Currency | **Non-VRSC collateral with SIGHASH_SINGLE\|ANYONECANPAY** | ✅ §32 |
 | Tooling | Wallet key-lookup path required for cryptocondition inputs | ✅ §32 |
-| Data | **Marketplace data layer (loan.offer.v1 in multimap, cross-node readable)** | ✅ §33 |
+| Data | **Marketplace data layer (multimap entry cross-node readable)** | ✅ §33 |
 | Options | **Pre-paid premium + atomic exercise + expiryheight** | ✅ §26 |
 | Options | **Expired-path: rejection + writer recovers underlying** | ✅ §27 |
 
