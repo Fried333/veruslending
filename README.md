@@ -25,14 +25,20 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 
 | Mechanism | Status |
 |---|---|
-| Loan-ID structure (2-of-2 multisig, no recovery, no revoke) | ✅ validated |
+| Loan-ID structure — VerusID flavor (2-of-2 multisig, null revoke/recover) | ✅ validated |
+| **Loan-ID — pure p2sh flavor (no VerusID needed)** | ✅ validated |
 | Atomic origination (raw multi-party tx) | ✅ validated |
+| **Cross-currency origination + repayment (e.g. VRSC collateral + DAI principal)** | ✅ validated |
 | **Pre-signed Tx-Repay (SIGHASH_SINGLE\|ANYONECANPAY)** — canonical | ✅ validated |
-| Default claim (Tx-B with nLockTime) | ✅ validated |
-| Borrower's rescue (Tx-C, structurally identical to Tx-B) | ✅ validated by extension |
+| **Pre-signed Tx-B (SIGHASH_SINGLE\|ANYONECANPAY + nLockTime)** — symmetric default-claim | ✅ validated |
+| **Pre-signed Tx-C (rescue, far-future nLockTime, output to borrower)** | ✅ validated on mainnet |
+| Broadcaster-pays-fee variant (collateral returned in full) | ✅ validated for both Tx-Repay and Tx-B |
+| Pre-locktime broadcast rejection (`64: non-final`) | ✅ validated for both VerusID and p2sh |
+| Tx-Repay broadcast invalidates pre-signed Tx-B (UTXO consumption) | ✅ validated |
+| Output 0 tampering (recipient or amount change) rejected | ✅ validated — `mandatory-script-verify-flag-failed` |
 | Front-run protection (no offer ever in mempool) | ✅ structural |
 
-See [TESTING.md](./TESTING.md) for txid references.
+See [TESTING.md](./TESTING.md) for txid references and [SCENARIOS.md](./SCENARIOS.md) for the full scenario test matrix.
 
 ## Why it matters
 

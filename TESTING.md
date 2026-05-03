@@ -257,8 +257,183 @@ Companion to test §16. Demonstrates the complete loan lifecycle when the borrow
 
 Together with test §16, this demonstrates both canonical settlement paths (repay or default) work end-to-end with no third-party involvement.
 
+### 18. Cross-currency p2sh happy path (Loan-ID without VerusID)
+
+Demonstrates the protocol works without any VerusID. Loan-ID is a pure 2-of-2 p2sh derived from both parties' pubkeys — no on-chain registration, no fee for "creating" the Loan-ID.
+
+**Loan terms:**
+- Collateral: 10 VRSC (Alice → p2sh)
+- Principal: 5 DAI.vETH (Bob → Alice at origination)
+- Repayment: 5.5 DAI.vETH (10% interest, due unilaterally by Alice)
+- Loan-ID: p2sh `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne` (derived from Alice + Bob's pubkeys)
+
+**Origination (Tx-A):**
+- Tx: `3b23258b3d21a9e2ca45f7c73762f9790bb488a8fbf0a8aeb1bd9dcdeace168b`
+- Inputs: Alice 73.9972 VRSC + Bob 5 DAI + Bob 0.4 VRSC fee budget
+- Outputs: 10 VRSC → p2sh, 5 DAI → Alice (RJ6Xejo), 63.9972 VRSC → Alice change, 0.3998 VRSC → Bob change
+- Multi-currency tx confirmed cleanly
+
+**Pre-signed Tx-Repay template** (held by Alice off-chain):
+- Input 0: collateral UTXO (10 VRSC at p2sh), signed `SIGHASH_SINGLE | ANYONECANPAY` by both parties via redeem script
+- Output 0: 5.5 DAI → Bob (sig-locked, paired with Input 0 by index)
+
+**Repayment (Tx-Repay):**
+- Tx: `25564b4cee8dcf39002c44aca442907ef1f666fb582cbb5f767b8a1f181f78de`
+- Alice extended template: added inputs (Tx-A's 5 DAI vout + her 0.5 DAI from setup) signed `SIGHASH_ALL`, added Output 1 = 9.9999 VRSC collateral return
+- Confirmed cleanly with Tx-A in same block (chained mempool)
+
+**Final state:**
+- p2sh: 0 VRSC (consumed)
+- Bob (.44): +5.5 DAI received
+- Alice (RBV6Z3w2 change addr): +9.9999 VRSC collateral return + her existing 63.9972 VRSC change
+
+**Validates:**
+- ✅ p2sh 2-of-2 multisig works as Loan-ID (no VerusID needed)
+- ✅ Cross-currency Tx-A (VRSC + DAI in one atomic tx)
+- ✅ SIGHASH_SINGLE|ANYONECANPAY pre-signed input survives extension by additional inputs/outputs
+- ✅ Lender's pre-commitment is irrevocable across currency boundaries
+- ✅ Same protocol mechanics as VerusID flavor (§16) but without the registration ceremony
+
+### 19. Cross-currency p2sh default path
+
+Companion to §18. Same Loan-ID p2sh, fresh UTXOs, default outcome.
+
+**Origination (Tx-A2):**
+- Tx: `98ce7f2d403605fdca9bbabacb318ec29f69e7cf48b5d000c2373bb5896e46ea`
+- Same 10 VRSC collateral / 5 DAI principal structure
+
+**Default (Tx-B):**
+- Tx: `fb1b58b7ac61b008fb5352109cc181635536854a28918fa9beee871d78b5ec9a`
+- Alice never broadcast Tx-Repay
+- Bob broadcast pre-signed Tx-B post-locktime
+- Bob received 9.9999 VRSC (collateral less 0.0001 fee)
+- Alice kept the 5 DAI principal she received at origination, lost the collateral
+
+**Pre-locktime rejection (separate diagnostic):**
+- Standalone tx with locktime 4050324 broadcast at block 4050224
+- Rejected: `error code: -26 — 64: non-final` ✅
+- Confirms nLockTime enforcement on p2sh-flavor txs (mirrors §17 which validated this for VerusID-flavor)
+
+**Validates:**
+- ✅ Default path on p2sh
+- ✅ nLockTime enforcement on p2sh inputs (not just cryptocondition / VerusID)
+
+### 20. Broadcaster-pays-fee variant — happy path (Test C)
+
+Refinement: instead of taking the fee out of the collateral output, the broadcaster (Alice) supplies her own VRSC fee input. Collateral returns to her in full.
+
+**Origination (Tx-A3):**
+- Tx: `cba6fcc017e1e30e119f85d272b2b896c8c329b26eed1a7b699e912c4a2da3d5`
+- Same 10 VRSC / 5 DAI structure
+
+**Pre-signed Tx-Repay template:**
+- Input 0: collateral, signed `SIGHASH_SINGLE | ANYONECANPAY` by both
+- Output 0: 5.5 DAI → Bob (sig-locked)
+
+**Repayment (Tx-Repay):**
+- Tx: `59e743d1cac41c63312c90ef40ee179268c2049ef4f73457cb1ac7cc6a62775e`
+- Alice extended with: 5 DAI from origination + 0.5 DAI from setup + 0.3998 VRSC fee budget (signed SIGHASH_ALL)
+- New outputs: **10.0 VRSC (FULL) → Alice**, 0.3997 VRSC change → Alice
+- Final state: collateral returned exact-amount, Alice paid 0.0001 VRSC fee from her own pocket
+
+**Validates:**
+- ✅ Broadcaster can pay fee externally instead of from collateral
+- ✅ Collateral can be returned in full (cleaner UX, especially for non-VRSC collateral)
+- ✅ SIGHASH_SINGLE|ANYONECANPAY does not require any specific output beyond Output 0
+
+### 21. Broadcaster-pays-fee variant — default path (Test D)
+
+Companion to §20 for default path. Tx-B uses `SIGHASH_SINGLE | ANYONECANPAY` (instead of plain `SIGHASH_ALL`) so Bob can attach his own fee input + change output at default-claim broadcast time.
+
+**Origination (Tx-A4):**
+- Tx: `009d12e4045f9ea88141a171ede2bb382c7932ea239dc11a17e3c2f6f735277e`
+
+**Default (Tx-B):**
+- Tx: `ab8be393ca2907137a5719eeac955bc2f3942ae976f2f4378284e200da626926`
+- Pre-signed: Input 0 (collateral) signed `SIGHASH_SINGLE | ANYONECANPAY`, Output 0 = 10 VRSC to Bob (full), nLockTime = block+5
+- Bob extended at broadcast: added his 0.3999 VRSC fee input (signed SIGHASH_ALL), added Output 1 = 0.3998 VRSC change to himself
+- Final: Bob received exactly 10 VRSC (collateral, no fee erosion); Bob paid 0.0001 VRSC fee from his own input
+
+**Spec note:** This proves the SAME sighash discipline (`SIGHASH_SINGLE | ANYONECANPAY`) works for BOTH Tx-Repay and Tx-B. Symmetric protocol — both settlement paths use the same signature flag.
+
+**Validates:**
+- ✅ Tx-B with `SIGHASH_SINGLE | ANYONECANPAY` and nLockTime
+- ✅ Default-path broadcaster (Bob) can attach own fee input
+- ✅ Collateral fully claimed without erosion
+
+### 22. Tx-Repay broadcast invalidates pre-signed Tx-B (A4)
+
+Sanity test: once Alice broadcasts Tx-Repay, Bob's pre-signed Tx-B (which spends the same collateral UTXO) becomes unbroadcastable.
+
+**Setup:**
+- Origination Tx-A5: `9668bba3d4baf647760be93b3940d2be7c2f605c66c575eb08bab4b39854125e`
+- Pre-signed both Tx-Repay and Tx-B for the same collateral UTXO
+- Tx-B nLockTime = current (immediately broadcastable as far as locktime is concerned)
+
+**Test:**
+- Broadcast Tx-Repay: `e59c6cc312a28f3ab6d8b12fea42ca75b490bc903dc67ff813701bd26c473dcc` ✓
+- Attempt Tx-B broadcast on local: rejected `error code: -26 — 16: bad-txns-inputs-spent`
+- Attempt Tx-B broadcast on .44 (different mempool): same rejection
+
+**Validates:**
+- ✅ UTXO double-spend protection enforced at chain level (not just per-mempool)
+- ✅ Once a settlement path is exercised, all alternative settlement paths are dead
+
+### 23. Tx-C rescue path (F1)
+
+First on-mainnet validation of Tx-C. The rescue path is for "both parties have abandoned the loan" scenarios — collateral returns to the borrower at a far-future nLockTime.
+
+**Setup:**
+- Origination Tx-A6: `ae30c9f7f92ab9d5f399b4ddddb7ed0ecd053c57bb57435222e6b9934d387873`
+- Pre-signed Tx-Repay (Output 0 = 5.5 DAI to Bob, no nLockTime, held by Alice)
+- Pre-signed Tx-B (Output 0 = 10 VRSC to Bob, nLockTime = block+5, held by Bob)
+- Pre-signed Tx-C (Output 0 = 10 VRSC to Alice, nLockTime = block+15, held by Alice)
+- All three settlement templates signed with same `SIGHASH_SINGLE | ANYONECANPAY` discipline
+
+**Test:**
+- Did NOT broadcast Tx-Repay or Tx-B (simulating both-parties-abandon)
+- Waited for Tx-C's nLockTime (block 4050274)
+- Alice extended Tx-C with her own VRSC fee input + change output, broadcast
+- Tx: `3a2943fb83762849c631cd055dd84a94185d6acce684125f608097592339663d`
+- Confirmed: Alice received the full 10 VRSC collateral back
+
+**Validates:**
+- ✅ Tx-C rescue mechanic with `SIGHASH_SINGLE | ANYONECANPAY` and nLockTime
+- ✅ Tx-Repay, Tx-B, Tx-C can coexist as pre-signed alternatives, only one wins
+- ✅ Borrower can recover collateral if both parties abandon (subject to far-future nLockTime delay)
+- ✅ Same sighash discipline across all three settlement paths — symmetric protocol
+
+### 24. Output 0 tampering rejected (D1, D2)
+
+Validates that `SIGHASH_SINGLE` truly locks Output 0 — neither recipient nor amount can be changed without invalidating the lender's pre-signature.
+
+**Setup:**
+- Origination Tx-A7: `b0aba4a88385a109c492c720e5186d94270e889a2afa076e4e2fa0022d44e7a7` (small loan: 2 VRSC collateral, 1 DAI principal, 1.1 DAI repayment)
+- Pre-signed Tx-Repay template normally: Output 0 = 1.1 DAI → Bob (RHze)
+
+**D1 — recipient tamper:**
+- Hex-substituted Output 0's recipient hash160 from Bob's `5f97b5d514076f9d1dd975d05023d76f742f78b4` to Alice's `60b4e52096c92cd41e83848d142861244b764d21`
+- Decoder confirmed Output 0 now read `RJ6XejoGrH9TAX5grUmNfKSqBmW1dmg8V9` (Alice)
+- Added Alice's funding inputs and broadcast
+- Rejected: `error code: -26 — 16: mandatory-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)` ✅
+
+**D2 — amount tamper:**
+- Hex-substituted Output 0's amount from 1.1 DAI to 0.5 DAI (borrower trying to underpay interest)
+- Decoder confirmed Output 0 still went to Bob, just at smaller amount
+- Same broadcast attempt → same rejection: `mandatory-script-verify-flag-failed` ✅
+
+**Validates:**
+- ✅ Borrower cannot redirect lender's payment to anywhere else (D1)
+- ✅ Borrower cannot underpay the agreed amount (D2)
+- ✅ Verus's ECDSA signature verification correctly enforces SIGHASH_SINGLE's commitment over Output 0
+- ✅ Pre-commitment is robust under realistic adversarial conditions
+
 ## What remains untested (conservative assumptions)
 
-- Behavior of pre-signed transactions across chain reorganizations
+- Behavior of pre-signed transactions across chain reorganizations (G1–G3)
 - Behavior when input 0 (borrower's funding input) is added at repayment time vs included as a placeholder at origination — assumed equivalent per ANYONECANPAY semantics
 - Cross-chain loan denominations involving Verus PBaaS bridges
+- Race-at-maturity-boundary (C1) — Tx-Repay and Tx-B broadcast simultaneously, first miner wins
+- Death/inheritance scenarios (E1–E6) — primarily about wallet UX, not protocol mechanics
+- Non-VRSC collateral in practice (H1) — should work per the cross-currency results in §18-§21 but not directly tested with e.g. tBTC.vETH as collateral
+- D3 (broadcaster adds extra outputs to steal extra value) — argued safe by accounting (tx must balance, broadcaster's added inputs must fund their added outputs). Not directly tested.
