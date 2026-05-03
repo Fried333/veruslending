@@ -102,12 +102,28 @@ For Profile L the equivalent semantics are inherent to p2sh: the script has no c
 | Use case | Recommended profile |
 |---|---|
 | Ad-hoc loan between known parties | L |
-| Lending desk doing many loans (shared parent ID) | V |
+| Lending desk doing many loans (shared parent ID for vaults) | V |
 | Community lending facility issuing vault-IDs as a service | V |
-| On-chain encrypted hex-backup matters for UX | V |
 | Minimal overhead, zero on-chain registration | L |
 
 The protocol's cryptographic guarantees are identical between profiles. The choice is operational — naming, fees, ID infrastructure — not security.
+
+### 2.4 Vault identity is independent from party identity
+
+A common point of confusion: **the vault's profile (L vs V) is independent from whether the borrower and lender themselves use VerusIDs.**
+
+The reputation/credit-identity layer (§13) lives on the *parties'* personal VerusIDs, not on the vault. Encrypted multimap hex backup (§13.1) lives on each party's own VerusID, not on the vault. So:
+
+| Vault | Borrower's identity | Lender's identity | What you get |
+|---|---|---|---|
+| p2sh (L) | R-address | R-address | Cheapest. Fully anonymous. No reputation. |
+| p2sh (L) | VerusID | VerusID | **Recommended** — cheap vault + reputation/multimap features for both parties |
+| VerusID (V) | VerusID | VerusID | Maximum on-chain context (loan also has its own multimap entries) |
+| VerusID (V) | R-address | R-address | Possible but unusual — ID adds little if neither party has one |
+
+**The recommended default for an active lending market is p2sh vault + party VerusIDs.** This combines zero per-loan registration cost with full reputation tracking and encrypted hex backup. The vault doesn't *need* to be a VerusID for any of those features to work — they live on the parties' identities.
+
+Profile V vaults are only the right choice when the loan itself benefits from being a named, on-chain-discoverable entity (lending desks issuing branded loans, community lending facilities, syndicated loans where multiple parties need to query the loan state).
 
 ---
 
@@ -679,6 +695,159 @@ The minimal mechanic — premium paid upfront, underlying locked at 2-of-2 vault
 - **Reputation system** layered on Profile V's contentMultimap for repeat counterparties
 - **Variable-rate loan support** via periodic Tx-Repay re-signing protocol
 - **Spec for syndicated/multi-party loans** (multiple lenders pool into one vault)
+
+---
+
+## 13. Reputation and credit-identity (Profile V's strongest case)
+
+For ad-hoc loans between known parties, Profile L (p2sh, no VerusID) is sufficient. But for a real lending market — where strangers want to evaluate counterparties and price risk — Profile V's VerusID enables an on-chain credit-identity layer that doesn't exist in Profile L.
+
+### The mechanism
+
+At origination (or repayment / default), both parties cooperatively write a loan-history entry to BOTH their VerusIDs' contentmultimap. Because both parties sign the entry, neither can fabricate it unilaterally — it's a non-forgeable, non-repudiable record on chain.
+
+```json
+{
+  "loan.history.v1": [{
+    "loan.entry.v1": {
+      "loan_id":              "loan-XXXX.facility@",
+      "role":                 "borrower" | "lender",
+      "counterparty_id":      "<other-party-VerusID>",
+      "principal_currency":   "<currency-id>",
+      "principal_amount":     <amount>,
+      "interest_rate":        <fraction>,
+      "collateral_currency":  "<currency-id>",
+      "collateral_amount":    <amount>,
+      "ltv":                  <fraction>,
+      "term_days":            <number>,
+      "originated_tx":        "<txid>",
+      "originated_block":     <number>,
+      "outcome":              "settled" | "defaulted" | "in_progress" | "rescued",
+      "outcome_tx":           "<txid>",
+      "outcome_block":        <number>
+    }
+  }]
+}
+```
+
+### What anyone can compute from public chain
+
+For any VerusID, by reading their `loan.history.v1` multimap entries:
+
+- Default rate = `defaulted / (settled + defaulted)`
+- Total volume (principal across all entries)
+- Tenure (time since first loan)
+- Counterparty diversity (unique IDs interacted with)
+- Average LTV (risk discipline visible)
+- Recency (are they still active?)
+- Largest loan handled cleanly
+- Currency diversity
+
+Wallets and lending UX can implement custom scoring functions over this data. Anyone disagreeing with a scoring algorithm can implement their own. **There is no canonical scoring authority.**
+
+### Why this is different from traditional credit
+
+- **No centralized agency.** Scoring is purely a function over public on-chain data.
+- **No KYC.** Reputation is built within the Verus system; not linked to real-world identity unless the VerusID owner chooses to publish that linkage.
+- **Portable.** Same VerusID is recognized by every Verus-aware lending wallet. No data silos.
+- **Costly to discard.** VerusIDs can be transferred or abandoned, but the registration cost and observable abandonment make deliberate reputation torching deliberate (not automatic).
+
+### What this unlocks
+
+This shifts the practical envelope for what loans the protocol can support:
+
+| Loan to | Without reputation (today) | With reputation tracking |
+|---|---|---|
+| Known counterparty | works (existing design) | works + reputation accrues |
+| Friend-of-friend | works with manual due diligence | works with automated on-chain query |
+| **Anonymous stranger with track record** | doesn't work | **works at appropriate LTV/rate** |
+| Anonymous stranger with no track record | doesn't work | doesn't work (unchanged) |
+
+Importantly: **the protocol's cryptographic core doesn't change.** Reputation is purely a layer above the existing Tx-O/Tx-Repay/Tx-B/Tx-C primitive. A wallet that ignores reputation entries still works; a wallet that uses them gets richer counterparty filtering.
+
+### Trust assumptions
+
+- Loan-history entries are co-signed by both parties at relevant moments. Neither can lie unilaterally.
+- A party can refuse to sign the outcome entry to deny their counterparty a clean record. Mitigation: include the outcome txid in the entry; absence of an outcome entry next to a confirmed Tx-Repay/Tx-B is itself evidence visible to the chain.
+- Reputation can be game-able: someone could accumulate a clean record over many small loans, then default catastrophically on a large one. Counterparties should weight loans by size, not just count.
+- Sybil attacks: someone could create many VerusIDs, lend among themselves at small scale to fake history, then borrow large from a real counterparty. Defenses: counterparty diversity weighting (unique counterparties matter), loan-graph analysis (clusters of small reciprocal loans are suspicious), tenure weighting.
+
+### Implementation status
+
+- ✅ Verus contentmultimap supports the structured entries described above today
+- ✅ VDXF keys can be defined for `loan.history.v1` schema
+- ❌ Reference wallet: not yet implemented
+- ❌ Scoring algorithms: not yet defined; v1 might just expose raw fields and let UI render them
+
+This is the strongest reason to make Profile V a first-class option in the spec rather than a footnote.
+
+### 13.1 Encrypted multimap entries — durable hex storage and async coordination
+
+VerusIDs support encrypted contentmultimap entries via identity z-keys. Data encrypted to a specific VerusID can only be decrypted by the holder of that ID. This solves several practical problems for the lending protocol:
+
+#### Hex backup (durable, seed-recoverable)
+
+The biggest operational risk in Profile L is **losing the pre-signed hex**. If Alice loses her Tx-Repay file, she's forced into default even if she wanted to repay.
+
+In Profile V, the wallet can write the pre-signed hex to Alice's own VerusID multimap, encrypted to her own viewing key:
+
+```json
+{
+  "loan.tx-repay.v1": [{
+    "loan.tx-repay.encrypted.v1": {
+      "loan_id":     "loan-XXXX.facility@",
+      "encrypted":   "<base64 ciphertext, encrypted to alice@'s viewing key>"
+    }
+  }]
+}
+```
+
+Recovery: Alice imports her seed into a fresh wallet, derives her viewing key, decrypts the multimap entry, recovers the hex. No file backups needed. Works as long as the chain exists.
+
+The same pattern applies to Tx-B (lender-side), Tx-C (borrower-side rescue), and Tx-O (during the offer window).
+
+#### Async ceremony coordination
+
+The origination ceremony needs both parties to:
+1. Exchange pubkeys
+2. Build the templates
+3. Cooperatively sign each
+4. Verify their counterparts
+
+In Profile V with encrypted multimap, each step can be a multimap entry encrypted to the counterparty's viewing key. The wallet polls the counterparty's ID for new entries, processes them, and writes responses. Neither party needs to be online simultaneously. The ceremony becomes asynchronous via the chain itself acting as the message bus.
+
+```
+Define VDXF keys for the ceremony:
+  vrsc::loan.offer.v1               (lender posts offer, public or encrypted to specific borrower)
+  vrsc::loan.accept.v1              (borrower posts acceptance, encrypted to lender)
+  vrsc::loan.tx-o.draft.v1          (encrypted draft tx hex for cosigning)
+  vrsc::loan.tx-o.signed.v1         (fully signed Tx-O, encrypted to counterparty)
+  vrsc::loan.tx-repay.template.v1   (pre-signed Tx-Repay, encrypted to borrower)
+  vrsc::loan.tx-b.template.v1       (pre-signed Tx-B, encrypted to lender)
+  vrsc::loan.tx-c.template.v1       (pre-signed Tx-C, encrypted to borrower)
+  vrsc::loan.status.v1              (public — "active", "settled", "defaulted")
+```
+
+Each entry is a single multimap write; the recipient's wallet decrypts and processes. No off-chain server, no centralized coordinator.
+
+#### Encrypted loan terms
+
+Loan terms (counterparty identities, amounts, rates) can themselves be encrypted in the multimap. Anyone can see "VerusID alice@ has an active loan" (via the `loan.status.v1` public entry), but only the parties can read the terms. Useful for OTC-style lending where terms are commercially sensitive.
+
+#### Trust dependencies
+
+- Identity z-keys are derived from the holder's seed phrase. Same OPSEC as any wallet seed.
+- Recipient must possess the seed corresponding to their VerusID's viewing key. Lost seed = lost ability to decrypt past entries.
+- Encryption uses Verus's existing primitives. No new cryptography introduced.
+
+#### Implementation status
+
+- ✅ Verus identity z-keys exist
+- ✅ Encrypted multimap entries supported
+- ❌ Reference wallet flow: not yet built; could be added incrementally to existing Verus wallet
+- ❌ VDXF schema: needs canonical definition before interop is possible
+
+This collapses several "wallet UX problems" the spec currently flags into "use the chain as the storage and message bus." Profile V is the only profile that can do this — Profile L has no equivalent.
 
 ---
 
