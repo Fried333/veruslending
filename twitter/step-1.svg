@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" font-family="system-ui, -apple-system, sans-serif">
+  <style>
+.title { font-size: 36px; font-weight: 800; fill: #0f172a; }
+.subtitle { font-size: 20px; fill: #475569; font-weight: 500; }
+.step-label { font-size: 16px; fill: #64748b; font-weight: 600; }
+.box-text { font-size: 18px; fill: #1e293b; font-weight: 500; }
+.box-text-bold { font-size: 20px; fill: #0f172a; font-weight: 700; }
+.box-small { font-size: 14px; fill: #64748b; font-style: italic; }
+.caption { font-size: 18px; fill: #1e293b; font-weight: 500; }
+.footer { font-size: 14px; fill: #94a3b8; font-weight: 500; }
+.tag { font-size: 13px; font-weight: 700; fill: #fff; }
+.borrower-fill { fill: #2563eb; }
+.lender-fill { fill: #059669; }
+.vault-fill { fill: #7c3aed; }
+.chain-fill { fill: #6b7280; }
+.amount { font-size: 22px; font-weight: 800; fill: #0f172a; }
+</style>
+  
+<defs>
+  <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+  </marker>
+  <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+  </marker>
+  <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+  </marker>
+  <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+  </marker>
+</defs>
+
+  
+  <rect x="0" y="0" width="1200" height="675" fill="#f8fafc"/>
+  <rect x="0" y="0" width="1200" height="80" fill="#0f172a"/>
+  <text x="50" y="50" font-size="22" font-weight="700" fill="#fff">VerusLending</text>
+  <text x="1150" y="50" font-size="18" fill="#94a3b8" text-anchor="end">step 1 of 8</text>
+  <text x="50" y="135" class="title">Two parties, no middleman</text>
+  <text x="50" y="170" class="subtitle">Alice wants to borrow. Bob wants to lend. Both have a Verus wallet.</text>
+
+  
+  
+  <rect x="150" y="230" width="360" height="180" rx="12" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <rect x="150" y="230" width="360" height="34" rx="12" fill="#2563eb"/>
+  <rect x="150" y="254" width="360" height="10" fill="#2563eb"/>
+  <text x="330" y="252" text-anchor="middle" class="tag">BORROWER</text>
+  <text x="330" y="302" text-anchor="middle" class="box-text-bold">Alice</text>
+  <text x="330" y="330" text-anchor="middle" class="box-small">Has 10 VRSC collateral</text>
+
+  
+  <rect x="690" y="230" width="360" height="180" rx="12" fill="#fff" stroke="#059669" stroke-width="3"/>
+  <rect x="690" y="230" width="360" height="34" rx="12" fill="#059669"/>
+  <rect x="690" y="254" width="360" height="10" fill="#059669"/>
+  <text x="870" y="252" text-anchor="middle" class="tag">LENDER</text>
+  <text x="870" y="302" text-anchor="middle" class="box-text-bold">Bob</text>
+  <text x="870" y="330" text-anchor="middle" class="box-small">Has 5 DAI to lend</text>
+
+  <path d="M 530 320 L 670 320" stroke="#475569" stroke-width="3" stroke-dasharray="8,6" fill="none"/>
+  <text x="600" y="305" text-anchor="middle" class="box-small">agreement off-chain</text>
+  <text x="600" y="475" text-anchor="middle" class="caption" font-weight="600">No bank. No platform. No registration.</text>
+  <text x="600" y="510" text-anchor="middle" class="caption">Two pubkeys, one chain.</text>
+
+  
+  <text x="600" y="650" class="footer" text-anchor="middle">github.com/Fried333/veruslending — empirically validated on Verus mainnet</text>
+
+</svg>

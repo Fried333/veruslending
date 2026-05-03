@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" font-family="system-ui, -apple-system, sans-serif">
+  <style>
+.title { font-size: 36px; font-weight: 800; fill: #0f172a; }
+.subtitle { font-size: 20px; fill: #475569; font-weight: 500; }
+.step-label { font-size: 16px; fill: #64748b; font-weight: 600; }
+.box-text { font-size: 18px; fill: #1e293b; font-weight: 500; }
+.box-text-bold { font-size: 20px; fill: #0f172a; font-weight: 700; }
+.box-small { font-size: 14px; fill: #64748b; font-style: italic; }
+.caption { font-size: 18px; fill: #1e293b; font-weight: 500; }
+.footer { font-size: 14px; fill: #94a3b8; font-weight: 500; }
+.tag { font-size: 13px; font-weight: 700; fill: #fff; }
+.borrower-fill { fill: #2563eb; }
+.lender-fill { fill: #059669; }
+.vault-fill { fill: #7c3aed; }
+.chain-fill { fill: #6b7280; }
+.amount { font-size: 22px; font-weight: 800; fill: #0f172a; }
+</style>
+  
+<defs>
+  <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+  </marker>
+  <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+  </marker>
+  <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+  </marker>
+  <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+  </marker>
+</defs>
+
+  
+  <rect x="0" y="0" width="1200" height="675" fill="#f8fafc"/>
+  <rect x="0" y="0" width="1200" height="80" fill="#0f172a"/>
+  <text x="50" y="50" font-size="22" font-weight="700" fill="#fff">VerusLending</text>
+  <text x="1150" y="50" font-size="18" fill="#94a3b8" text-anchor="end">step 5 of 8</text>
+  <text x="50" y="135" class="title">Loan active: nothing on chain</text>
+  <text x="50" y="170" class="subtitle">Three pre-signed settlement transactions are held off-chain. Same SIGHASH discipline in each.</text>
+
+  
+  
+  <rect x="40" y="230" width="270" height="320" rx="12" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <rect x="40" y="230" width="270" height="34" rx="12" fill="#2563eb"/>
+  <rect x="40" y="254" width="270" height="10" fill="#2563eb"/>
+  <text x="175" y="252" text-anchor="middle" class="tag">ALICE</text>
+  <text x="175" y="302" text-anchor="middle" class="box-text-bold">Tx-Repay (held)</text>
+  <text x="175" y="330" text-anchor="middle" class="box-small">broadcasts to repay</text>
+
+  
+  <rect x="465" y="240" width="270" height="130" rx="12" fill="#fff" stroke="#7c3aed" stroke-width="2" stroke-dasharray="6,4"/>
+  <rect x="465" y="240" width="270" height="32" rx="12" fill="#7c3aed"/>
+  <text x="600" y="262" text-anchor="middle" class="tag">VAULT</text>
+  <text x="600" y="302" text-anchor="middle" class="box-text-bold">2-of-2 p2sh</text>
+  <text x="600" y="328" text-anchor="middle" class="box-small">10 VRSC locked</text>
+
+  <text x="600" y="430" text-anchor="middle" class="box-small">collateral untouched</text>
+  <text x="600" y="455" text-anchor="middle" class="box-small">until one of the three</text>
+  <text x="600" y="480" text-anchor="middle" class="box-small">pre-signed txs broadcasts</text>
+  
+  <rect x="890" y="230" width="270" height="320" rx="12" fill="#fff" stroke="#059669" stroke-width="3"/>
+  <rect x="890" y="230" width="270" height="34" rx="12" fill="#059669"/>
+  <rect x="890" y="254" width="270" height="10" fill="#059669"/>
+  <text x="1025" y="252" text-anchor="middle" class="tag">BOB</text>
+  <text x="1025" y="302" text-anchor="middle" class="box-text-bold">Tx-B (held)</text>
+  <text x="1025" y="330" text-anchor="middle" class="box-small">broadcasts on default</text>
+
+  <rect x="400" y="510" width="400" height="80" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="2"/>
+  <text x="600" y="540" text-anchor="middle" class="box-text-bold" fill="#92400e">Tx-C (rescue, held by Alice)</text>
+  <text x="600" y="568" text-anchor="middle" class="box-small">far-future fallback if both sides abandon</text>
+
+  
+  <text x="600" y="650" class="footer" text-anchor="middle">github.com/Fried333/veruslending — empirically validated on Verus mainnet</text>
+
+</svg>

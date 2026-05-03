@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" font-family="system-ui, -apple-system, sans-serif">
+  <style>
+.title { font-size: 36px; font-weight: 800; fill: #0f172a; }
+.subtitle { font-size: 20px; fill: #475569; font-weight: 500; }
+.step-label { font-size: 16px; fill: #64748b; font-weight: 600; }
+.box-text { font-size: 18px; fill: #1e293b; font-weight: 500; }
+.box-text-bold { font-size: 20px; fill: #0f172a; font-weight: 700; }
+.box-small { font-size: 14px; fill: #64748b; font-style: italic; }
+.caption { font-size: 18px; fill: #1e293b; font-weight: 500; }
+.footer { font-size: 14px; fill: #94a3b8; font-weight: 500; }
+.tag { font-size: 13px; font-weight: 700; fill: #fff; }
+.borrower-fill { fill: #2563eb; }
+.lender-fill { fill: #059669; }
+.vault-fill { fill: #7c3aed; }
+.chain-fill { fill: #6b7280; }
+.amount { font-size: 22px; font-weight: 800; fill: #0f172a; }
+</style>
+  
+<defs>
+  <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+  </marker>
+  <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#059669"/>
+  </marker>
+  <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+  </marker>
+  <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"/>
+  </marker>
+</defs>
+
+  
+  <rect x="0" y="0" width="1200" height="675" fill="#f8fafc"/>
+  <rect x="0" y="0" width="1200" height="80" fill="#0f172a"/>
+  <text x="50" y="50" font-size="22" font-weight="700" fill="#fff">VerusLending</text>
+  <text x="1150" y="50" font-size="18" fill="#94a3b8" text-anchor="end">step 7 of 8</text>
+  <text x="50" y="135" class="title">Default: lender claims after maturity</text>
+  <text x="50" y="170" class="subtitle">If Alice doesn't repay, Bob broadcasts Tx-B once nLockTime is reached.</text>
+
+  
+  
+  <rect x="40" y="230" width="270" height="240" rx="12" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <rect x="40" y="230" width="270" height="34" rx="12" fill="#2563eb"/>
+  <rect x="40" y="254" width="270" height="10" fill="#2563eb"/>
+  <text x="175" y="252" text-anchor="middle" class="tag">ALICE</text>
+  <text x="175" y="302" text-anchor="middle" class="box-text-bold">(does nothing)</text>
+  <text x="175" y="330" text-anchor="middle" class="box-small">defaulted</text>
+
+  <rect x="465" y="240" width="270" height="220" rx="12" fill="#fff" stroke="#0f172a" stroke-width="2"/>
+  <text x="600" y="270" text-anchor="middle" class="box-text-bold">Tx-B broadcast</text>
+  <text x="600" y="295" text-anchor="middle" class="box-small" fill="#dc2626">at maturity + grace</text>
+  <text x="600" y="330" text-anchor="middle" class="box-text">vault → 0</text>
+  <text x="600" y="360" text-anchor="middle" class="box-text" fill="#059669">Bob: +10 VRSC (collateral)</text>
+  <text x="600" y="390" text-anchor="middle" class="box-text" fill="#2563eb">Alice: keeps 5 DAI principal</text>
+  <text x="600" y="425" text-anchor="middle" class="box-small">net: collateral → lender</text>
+  <path d="M 745 350 L 880 350" stroke="#059669" stroke-width="3" marker-end="url(#arrow-green)" fill="none"/>
+  
+  <rect x="880" y="230" width="270" height="240" rx="12" fill="#fff" stroke="#059669" stroke-width="3"/>
+  <rect x="880" y="230" width="270" height="34" rx="12" fill="#059669"/>
+  <rect x="880" y="254" width="270" height="10" fill="#059669"/>
+  <text x="1015" y="252" text-anchor="middle" class="tag">BOB</text>
+  <text x="1015" y="302" text-anchor="middle" class="box-text-bold">extends Tx-B</text>
+  <text x="1015" y="330" text-anchor="middle" class="box-small">+ fee input + change</text>
+
+  <text x="600" y="540" text-anchor="middle" class="caption" font-weight="700">Pre-locktime broadcast rejected by chain consensus.</text>
+  <text x="600" y="575" text-anchor="middle" class="box-small">Reorg-safe: 6-10 confirmations and the claim is final.</text>
+
+  
+  <text x="600" y="650" class="footer" text-anchor="middle">github.com/Fried333/veruslending — empirically validated on Verus mainnet</text>
+
+</svg>
