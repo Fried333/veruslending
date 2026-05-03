@@ -428,6 +428,54 @@ Validates that `SIGHASH_SINGLE` truly locks Output 0 — neither recipient nor a
 - ✅ Verus's ECDSA signature verification correctly enforces SIGHASH_SINGLE's commitment over Output 0
 - ✅ Pre-commitment is robust under realistic adversarial conditions
 
+### 25. Tx-O atomic-swap origination
+
+First mainnet validation of the v0.5 spec's Pattern A2 — origination as an atomic swap, mirroring Tx-Repay's signature discipline. Lender pre-commits offline; borrower triggers the broadcast unilaterally when ready.
+
+**Loan terms (small, just to validate the mechanic):**
+- Collateral: 2 VRSC (Alice → p2sh)
+- Principal: 0.5 DAI (Bob → Alice via pre-signed atomic swap)
+- Loan-ID: same p2sh `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne`
+
+**Phase 1 — Bob pre-signs offer offline:**
+- Built skeleton tx: 1 input (Bob's 0.5 DAI UTXO `98ce7f2d...` vout 3), 1 output (0.5 DAI → Alice)
+- Bob signed Input 0 with `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY`
+- Resulting hex (532 bytes) handed to Alice
+
+**Phase 2 — Alice extends and broadcasts at takeup:**
+- Added Input 1: Alice's 2.7997 VRSC UTXO at RBV6Z3w2
+- Added Output 1: 2 VRSC → p2sh Loan-ID (the collateral)
+- Added Output 2: 0.7996 VRSC → Alice's change
+- Alice signed Input 1 with `SIGHASH_ALL`
+- Broadcast: `023d3256f383e747846f132afe7a125899602fa300942aa34bc414e9b39ac033`
+- Confirmed in block `00000000000138b08285d05106a8c30b1bb6c448bae7140343a905bece8d9b6c`
+
+**Final state:**
+- p2sh: +2 VRSC (collateral now in custody)
+- Alice: +0.5 DAI received (principal, from Bob's pre-committed input)
+- Bob: -0.5 DAI (his offer was taken)
+- Fee: 0.0001 VRSC
+
+**Validates:**
+- ✅ Atomic-swap origination via SIGHASH_SINGLE|ANYONECANPAY (same discipline as Tx-Repay)
+- ✅ Lender can pre-commit offline; borrower triggers broadcast unilaterally
+- ✅ Borrower can choose the broadcast moment (e.g., favorable conditions, async UX)
+- ✅ Lender's pre-commitment is irrevocable in mempool — cannot retract once Alice broadcasts
+- ✅ Lender's only "cancellation" path is to spend his Input 0 elsewhere before Alice broadcasts
+
+**Why this matters:**
+
+This makes the protocol fully symmetric across all four phases. The same SIGHASH_SINGLE|ANYONECANPAY pre-commitment + broadcaster-extends-and-triggers pattern is now validated for:
+
+| Phase | Pre-signer | Trigger party | Tx |
+|---|---|---|---|
+| Tx-O — origination | Lender | Borrower | §25 (this test) |
+| Tx-Repay — settlement | Lender (& borrower) | Borrower | §16, §18, §20 |
+| Tx-B — default | Both | Lender | §17, §19, §21 |
+| Tx-C — rescue | Both | Borrower | §23 |
+
+Origination ceremony is no longer a synchronous-online event. It can be: lender posts offer → borrower takes when ready → loan exists. Same UX as a marketplace listing.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
