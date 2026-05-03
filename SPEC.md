@@ -1,6 +1,6 @@
 # VerusLending — Protocol Specification
 
-**Status:** Draft v0.5 — empirically validated on Verus mainnet (30 distinct test scenarios — full lending lifecycle, options market, generic p2p atomic swap, i-address recipient, double-spend rejection in both directions)
+**Status:** Draft v0.5 — empirically validated on Verus mainnet (32 distinct test scenarios — full lending lifecycle, options market, generic p2p atomic swap, i-address recipient, double-spend rejection in both directions, non-VRSC collateral)
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
@@ -492,21 +492,32 @@ Profile L lacks on-chain storage for loan terms. Keep a signed copy off-chain (e
 
 ### Currency support
 
-**Principal, interest, repayment** can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, DAI.vETH, tBTC.vETH, vUSDC), or PBaaS chain currencies.
+**Principal, interest, repayment, and collateral** can be denominated in any Verus-supported currency: VRSC, fractional-reserve currencies, bridged tokens (vETH, DAI.vETH, tBTC.vETH, vUSDC), or PBaaS chain currencies.
 
-**Collateral has constraints** discovered during mainnet validation (TESTING.md §31):
+**Mainnet-validated constraints (TESTING.md §31, §32):**
 
-- ✅ **VRSC collateral** works in all profiles (L and V), with the canonical async-pre-sign primitive. All existing validated tests use this.
-- ❌ **Non-VRSC collateral in Profile L (p2sh vault)** is rejected by Verus at broadcast — reserve-currency cryptocondition outputs to plain p2sh script hashes are non-standard. The vault for non-VRSC collateral must be a VerusID i-address (Profile V).
-- ⚠️ **Non-VRSC-only collateral in Profile V (i-address vault)** can be deposited (Tx-A works), but the canonical settlement templates *cannot* be pre-signed with `SIGHASH_SINGLE|ANYONECANPAY`. The Verus signer fails with `Opcode missing or not understood` when Input 0 is a reserve-currency-only cryptocondition. Settlement is still possible via cooperative SIGHASH_ALL (both parties online together at settlement time), but loses the protocol's "lender can be offline / dead at repayment" property.
+- ✅ **VRSC collateral** works in both Profile L (p2sh) and Profile V (i-address) vaults with the canonical async-pre-sign primitive. Most validated tests use this (§16, §17, §18-§30).
+- ✅ **Non-VRSC collateral in Profile V (i-address) vault** also works with the canonical async-pre-sign primitive — validated mainnet §32. SIGHASH_SINGLE|ANYONECANPAY signs reserve-currency cryptocondition inputs correctly when the wallet handles key lookup (pass `null` for prevtxs and privkeys to `signrawtransaction`).
+- ❌ **Non-VRSC collateral in Profile L (p2sh) vault** is impossible — reserve-currency cryptocondition outputs to plain p2sh script hashes are non-standard at the chain level. The chain rejects the origination tx with `bad-txns-failed-params-precheck`. Non-VRSC collateral requires Profile V (i-address) vault.
 
-**Practical recommendation:** Make collateral VRSC-valued. Principal, interest, and repayment can be any currency. This matches every validated test (§16-§30) and preserves all of the protocol's load-bearing properties.
+**Tooling caveat (not a protocol limitation):**
 
-**Tested workaround that DOES NOT work:** mixing VRSC dust into the vault output (e.g. `0.01 VRSC + 5 DAI` instead of `5 DAI` alone) does not unblock SIGHASH_SINGLE pre-signing. Validated mainnet (TESTING.md §31 + follow-up): same `Opcode missing or not understood` error regardless of whether the cryptocondition output also carries VRSC value. The issue is the reserve-transfer opcode itself, not the input's VRSC value.
+`signrawtransaction` has two key-handling paths:
+- **Wallet key-lookup path** (when prevtxs and privkeys are both `null`): the wallet associates input scriptPubKeys to addresses to keys directly. Works for cryptocondition reserve-transfer inputs.
+- **Explicit-key path** (when privkeys is a non-empty array): the signer evaluates the prevtx scriptPubKey to determine signing requirements. The cryptocondition reserve-transfer opcode is not understood by this path, fails with `Opcode missing or not understood`.
 
-For non-VRSC collateral when async settlement isn't required (e.g. parties are willing to coordinate at maturity): use Profile V vault + cooperative SIGHASH_ALL settlement. Validated §31.
+Wallets implementing the protocol should use the wallet key-lookup path for any input that's a cryptocondition output.
 
-The clean position: **collateral in VRSC** preserves all of the protocol's async-pre-sign properties for any-currency principal/repayment.
+**Tested workaround that turned out unnecessary:** mixing VRSC dust with reserve currency in the vault output. Doesn't change the signing behavior (still depends on wallet key-lookup path). Documented in TESTING.md §31 as historical record.
+
+### Profile choice for non-VRSC collateral
+
+| Collateral currency | Profile L (p2sh) | Profile V (i-address) |
+|---|---|---|
+| VRSC | ✅ works | ✅ works |
+| DAI / tBTC / any reserve currency | ❌ chain rejects | ✅ works (validated §32) |
+
+For loans involving non-VRSC collateral, use Profile V. The vault VerusID is the cost (sub-ID fee or top-level registration), but settlement properties (async pre-sign, lender-offline-at-repayment, broadcaster-pays-fee) all hold.
 
 ### LTV (loan-to-value) recommendations
 

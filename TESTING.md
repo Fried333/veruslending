@@ -718,6 +718,44 @@ Attempt 2: vault = VerusID `i6ebrehQ6dyJGjy8LoxkaPfJ2Vo7dXGbHy` (Profile V).
 
 For the canonical loan design, the recommendation is unchanged: **collateral in VRSC, principal/repayment in any currency**. This matches all existing validated tests (§16-§30).
 
+### 32. H1 corrected: non-VRSC collateral DOES work with SIGHASH_SINGLE|ANYONECANPAY
+
+**Correction to §31's conclusion.** The earlier finding that "SIGHASH_SINGLE|ANYONECANPAY fails on reserve-currency-only cryptocondition inputs" was a tooling bug, not a protocol limitation.
+
+**Discovery:**
+
+`signrawtransaction` has two key-handling paths:
+- **Explicit privkey path** (when `privkeys` is a non-empty array, e.g. `["KxWVD..."]`): fails for cryptocondition reserve-transfer inputs with `Opcode missing or not understood`. The signer evaluates the prevtx scriptPubKey to determine signing requirements and doesn't understand the reserve-transfer cryptocondition opcode.
+- **Wallet key-lookup path** (when `privkeys` is `null` or omitted): the wallet associates input scriptPubKeys to addresses to keys directly. Works correctly on cryptocondition reserve-transfer inputs.
+
+The earlier §31 tests passed `[]` (empty array) and `["..."]` (explicit), both of which take the explicit path and fail. Passing `null` instead routes through the wallet's key-lookup path which handles the cryptocondition correctly.
+
+**Validated mainnet:**
+
+Setup: same vault `i6ebrehQ6dyJGjy8LoxkaPfJ2Vo7dXGbHy` (2-of-2 [Alice, Bob], null revoke/recover) holding the mixed-currency UTXO from §31 (`d4d518f6...` vout 0 = 0.01 VRSC + 1 DAI).
+
+**Pre-sign Tx-Repay-style template:**
+- Input 0: vault's mixed-currency UTXO (cryptocondition with reserve transfer)
+- Output 0: 0.005 VRSC → Bob (sig-locked, the strike)
+- Both Alice (local) and Bob (.44) signed Input 0 with `SIGHASH_SINGLE | SIGHASH_ANYONECANPAY` using `signrawtransaction <hex> 'null' 'null' "SINGLE|ANYONECANPAY"` — both reported `complete: True`
+
+**Extended and broadcast (no further signing needed):**
+- Output 1: 1 DAI → Alice (collateral return)
+- Output 2: 0.0049 VRSC → Alice (change)
+- Tx: `086fb3eebfe31ef2b3191d5d2f7c48f615988700403ac68d8fdb37c779d985c1`
+- Confirmed cleanly
+
+**Validates:**
+- ✅ Reserve-currency cryptocondition vault inputs CAN be pre-signed with `SIGHASH_SINGLE | ANYONECANPAY` via the wallet key-lookup path
+- ✅ Non-VRSC collateral works with the canonical async-pre-sign primitive
+- ✅ The protocol's load-bearing properties (lender-offline-at-repayment, broadcaster-pays-fee, sig-locked Output 0) all hold for non-VRSC collateral in Profile V vaults
+- ✅ Profile V (i-address vault) is the correct choice for non-VRSC collateral; Profile L (p2sh) remains unable to hold reserve currencies due to non-standard output rejection
+
+**Spec updates:**
+- SPEC §9 currency-support section corrected
+- §31's earlier "VRSC-only collateral" recommendation reversed
+- The clean position is now: **any Verus currency works as collateral if using Profile V vault**
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)
