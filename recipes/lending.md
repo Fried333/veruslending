@@ -9,24 +9,35 @@ Two parties enter a binding loan: borrower puts up collateral, lender provides p
 
 ## What the protocol does
 
-Four pre-signed transactions form the loan's lifecycle:
+Five-phase lifecycle:
+
+| Phase | When | Who | What | Channel |
+|---|---|---|---|---|
+| 1. Discovery | Lender publishes terms | Lender | `loan.offer` multimap entry on lender's VerusID | chain (VerusID multimap) |
+| 2. Coordination | Borrower wants to take | Both | Exchange pubkeys, derive vault | encrypted multimap entry, or paste |
+| 3. Atomic origination (Tx-A) | Both ready | Both | Atomic: principal → borrower; collateral → vault | cooperative `createrawtransaction` + cosign |
+| 4. Pre-sign templates | At setup | Both | Cooperatively pre-sign Tx-Repay (borrower's) + Tx-B (lender's default-claim) + optional Tx-C (rescue) | cooperative cosign with `SIGHASH_SINGLE\|ANYONECANPAY` |
+| 5. Active / settlement | Anytime / after maturity | Borrower or lender | Unilateral broadcast of the relevant template | `sendrawtransaction` |
+
+The four transactions:
 
 | Tx | When | Who broadcasts | Effect |
 |---|---|---|---|
-| Tx-O | At origination | Borrower (atomic-swap take) | Lender's principal → borrower; borrower's collateral → vault |
-| Tx-Repay | Any time before maturity | Borrower | Repayment → lender; collateral → borrower |
-| Tx-B | After maturity + grace, if no repayment | Lender | Collateral → lender |
-| Tx-C (optional) | After far-future lockout | Borrower | Collateral → borrower (rescue if both abandoned) |
+| **Tx-A** | At origination | Either party (cooperative tx) | Lender's principal → borrower; borrower's collateral → vault |
+| **Tx-Repay** | Any time before maturity | Borrower | Repayment → lender; collateral → borrower |
+| **Tx-B** | After maturity + grace, if no repayment | Lender | Collateral → lender |
+| **Tx-C** (optional) | After far-future lockout | Borrower | Collateral → borrower (rescue if both abandoned) |
 
-The **vault** is a 2-of-2 multisig holding the collateral. Two flavors:
-- **Profile L** (p2sh) — VRSC collateral only, zero registration cost
-- **Profile V** (VerusID i-address) — any currency collateral, sub-ID registration cost (~0.1 VRSC)
+The **vault** is a 2-of-2 multisig holding the collateral:
+
+- **Profile L** (P2SH) — VRSC collateral only, zero registration cost. Default.
+- **Profile V** (VerusID i-address) — any currency collateral, sub-ID registration cost (~0.1 VRSC). Required for non-VRSC collateral because the chain enforces non-VRSC outputs go to i-addresses.
 
 ## What the user does
 
 In a wallet UI: browse offers → click "Accept" → click "Repay" at maturity. Two clicks total. The wallet handles everything else.
 
-In raw CLI / helper-script mode: 4 phases with ~10 RPC calls total per loan. Walked through below.
+In raw CLI: ~10 RPC calls per loan lifetime. Walked through below.
 
 ---
 
@@ -34,132 +45,157 @@ In raw CLI / helper-script mode: 4 phases with ~10 RPC calls total per loan. Wal
 
 This is the simplest case. Everything works with stock `verus` CLI; no helper script needed.
 
-**Loan terms**: Alice borrows 5 VRSC from Bob, putting up 10 VRSC as collateral. Repays 5.5 VRSC by block N+1000. Profile L vault.
+**Loan terms**: Alice (borrower) borrows 5 VRSC from Bob (lender), putting up 10 VRSC as collateral. Repays 5.5 VRSC by block N+1000. Profile L vault.
 
-### Step 1 — Derive the vault address
+### Phase 1 — Discovery (lender publishes the offer)
 
-Both parties exchange compressed pubkeys (off-chain — DM, email, paper).
+Bob posts his terms to his VerusID's multimap so anyone scanning the chain (or an explorer indexer) can find him. No borrower involved yet.
 
 ```bash
-# Each party derives the same vault address from both pubkeys
+# Build the offer JSON
+OFFER='{
+  "version": 1,
+  "type": "lend",
+  "principal":  {"currency":"VRSC", "amount":5},
+  "collateral": {"currency":"VRSC", "amount":10},
+  "rate": 0.10,
+  "term_days": 30,
+  "lender_pubkey":  "<bob_compressed_pubkey>",
+  "lender_address": "BOB_R_ADDRESS",
+  "valid_until_block": '"$(($(verus getblockcount) + 10000))"',
+  "active": true
+}'
+HEX=$(echo -n "$OFFER" | python3 -c "import sys; print(sys.stdin.read().encode().hex())")
+
+# VDXF id for vrsc::contract.loan.offer (canonical, see SCHEMA.md)
+verus getvdxfid "vrsc::contract.loan.offer"
+# Returns: {"vdxfid":"iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY", ...}
+
+# Write to Bob's VerusID
+verus updateidentity '{
+  "name": "bob.lender@",
+  "contentmultimap": {
+    "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY": ["'$HEX'"]
+  }
+}'
+```
+
+The offer is now publicly readable on chain. Borrowers find it via direct ID lookup (`getidentity bob.lender@`) or via a chain indexer that scans for `vrsc::contract.loan.offer` entries. See [marketplace.md](./marketplace.md).
+
+### Phase 2 — Coordination (vault derivation)
+
+Alice reads Bob's offer (chain-native, no comms required) and gets `lender_pubkey`. She then needs Bob to know HER pubkey so they can both compute the same 2-of-2 vault.
+
+Two ways to send the borrower's pubkey:
+
+- **Encrypted `loan.accept` multimap entry on Alice's own VerusID**, addressed to Bob's z-key (chain-native, asynchronous)
+- **Out-of-band paste** (Discord, email, QR — fine for known parties)
+
+Once Bob has Alice's pubkey, both compute the same vault deterministically:
+
+```bash
 ALICE_PUB=03e05933ec81c219e9aef5e5da4ea636f80864c8db9466e9cf090a26f6ca639640
 BOB_PUB=0270b46dc0dcfe28b35cbd76ba54c5560c88b64b80ebc3cf515b7035b0891c8250
 
+# Profile L (VRSC collateral): pure P2SH
 verus createmultisig 2 "[\"$ALICE_PUB\",\"$BOB_PUB\"]"
 # Returns: {"address":"bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne", "redeemScript":"..."}
+
+# Profile V (non-VRSC collateral): cooperatively register a sub-ID with
+#   primaryaddresses=[both R-addrs] and minsig=2.
+# The i-address of that ID is the vault.
 ```
 
-The `b...` address is the vault. It exists deterministically on chain — no registration, no fee.
+The `b...` (P2SH) or `i...` (VerusID) address is the vault. P2SH exists deterministically — no registration, no fee. Both parties compute it independently and verify they match.
 
-### Step 2 — Origination via makeoffer/takeoffer
+### Phase 3 — Atomic origination (Tx-A)
 
-Bob posts an offer giving 5 VRSC for 10 VRSC delivered to vault:
-
-```bash
-# Bob (lender)
-verus makeoffer "BOB_R_ADDRESS" '{
-  "changeaddress": "BOB_R_ADDRESS",
-  "offer": {"currency":"VRSC", "amount":5},
-  "for":   {"address":"BOB_R_ADDRESS", "currency":"VRSC", "amount":10}
-}'
-# (Note: same currency on both sides for VRSC-only loans is unusual;
-#  a real loan would have different terms — this is just the mechanic)
-```
-
-Hmm — actually VRSC-for-VRSC isn't a useful trade. Let me redo with actual loan economics.
-
-### Step 2 (corrected) — Origination
-
-For a real loan, lender's principal is in one form; borrower's collateral is another (or same currency, different amounts).
-
-Realistic VRSC-for-VRSC mechanic: lender lends 5 VRSC, borrower deposits 10 VRSC at vault. Same currency (VRSC) but different amounts. We can't do this via `makeoffer`/`takeoffer` (which expects different currencies), so we use the cooperative Tx-A approach:
+Loans use a **cooperative `createrawtransaction`** with both parties contributing inputs and signing their own input with default `SIGHASH_ALL`. **Not** `makeoffer`/`takeoffer` — that's the marketplace primitive used for atomic swaps and options, not loans.
 
 ```bash
-# Both parties build Tx-A together
-INPUTS='[{"txid":"<alice_collateral_utxo_txid>","vout":0},
-         {"txid":"<bob_principal_utxo_txid>","vout":0}]'
-OUTPUTS='{"<vault_address>":10,
-          "<alice_R_address>":5,
-          "<alice_change_address>":<change>,
-          "<bob_change_address>":<change>}'
+# Both parties build the unsigned Tx-A together
+INPUTS='[{"txid":"<bob_principal_utxo_txid>",  "vout":<vout>},
+         {"txid":"<alice_collateral_utxo_txid>","vout":<vout>}]'
+OUTPUTS='{"<alice_R_address>": 5,
+          "<vault_address>":   10,
+          "<bob_change_addr>": <change>,
+          "<alice_change_addr>": <change>}'
 
-# Alice signs her input
-verus createrawtransaction "$INPUTS" "$OUTPUTS" | \
-  verus signrawtransaction
-# (saves intermediate hex)
+# Step 1: Alice signs her collateral input (her node)
+verus createrawtransaction "$INPUTS" "$OUTPUTS" \
+  | verus signrawtransaction
+# (saves intermediate hex, partially signed)
 
-# Send hex to Bob, Bob signs his input
-ssh bob 'verus signrawtransaction <hex>'
+# Step 2: Ship hex to Bob, Bob signs his principal input (his node)
+ssh bob "verus signrawtransaction <hex>"
 
-# Broadcast
+# Step 3: Either party broadcasts
 verus sendrawtransaction <fully-signed-hex>
 ```
 
-For a more interesting loan with actual cross-currency (e.g. VRSC collateral for DAI principal), `makeoffer`/`takeoffer` works directly. See [swap.md](./swap.md) for the swap mechanics.
+After confirmation:
+- Vault has the collateral (locked under 2-of-2)
+- Alice has the principal in her R-address
+- Tx-A's txid is referenced by all subsequent templates
 
-### Step 3 — Cooperatively pre-sign settlement templates
+### Phase 4 — Pre-sign settlement templates
 
-Three templates: Tx-Repay, Tx-B, optionally Tx-C. Each follows the same pattern.
+Three templates: Tx-Repay, Tx-B, optionally Tx-C. Each input from the vault is pre-signed with `SIGHASH_SINGLE|ANYONECANPAY` so the broadcaster can extend with their own fee inputs (or skip extension if using collateral-pays-fee).
 
-**Tx-Repay template:**
+**Tx-Repay template** (borrower's repayment, no nLockTime — broadcastable any time):
 
 ```bash
-TXA_TXID=<from step 2>
-REDEEM_SCRIPT=<from step 1>
+TXA_TXID=<from Phase 3>
+EXPIRY=$((CURRENT_BLOCK + 1000))       # Tx-Repay's own expiryheight = maturity
 
-# Build the unsigned template
-INPUTS='[{"txid":"'$TXA_TXID'","vout":0}]'
-OUTPUTS='{"BOB_R_ADDRESS":5.5}'        # repayment to Bob (sig-locked)
-EXPIRY=$((CURRENT_BLOCK + 1000))       # Tx-Repay expires at maturity
+INPUTS='[{"txid":"'$TXA_TXID'","vout":<vault_vout>}]'
+OUTPUTS='{"BOB_R_ADDRESS":5.5}'        # Output 0: repayment to Bob (sig-locked)
 
 verus createrawtransaction "$INPUTS" "$OUTPUTS" 0 $EXPIRY > /tmp/repay_unsigned.hex
 
-# Alice cosigns
+# Both parties cosign the vault input with SIGHASH_SINGLE|ANYONECANPAY
 verus signrawtransaction $(cat /tmp/repay_unsigned.hex) null null "SINGLE|ANYONECANPAY" \
   > /tmp/repay_alice.json
 
-# Bob cosigns (ship hex to bob's node)
 ssh bob "verus signrawtransaction $(jq -r .hex /tmp/repay_alice.json) null null 'SINGLE|ANYONECANPAY'" \
   > /tmp/repay_signed.json
 
-# Resulting hex held by ALICE (the borrower)
+# Final hex held by ALICE (the borrower)
 jq -r .hex /tmp/repay_signed.json > /tmp/tx_repay_template.hex
 ```
 
-**Tx-B template** (similar, with `nLockTime = maturity + grace` and Output 0 = collateral to lender):
+**Tx-B template** (lender's default-claim, with `nLockTime = maturity + grace`):
 
 ```bash
-LOCKTIME=$((CURRENT_BLOCK + 1100))      # maturity + grace
+LOCKTIME=$((CURRENT_BLOCK + 1100))      # maturity + grace blocks
 
 verus createrawtransaction \
-  '[{"txid":"'$TXA_TXID'","vout":0}]' \
+  '[{"txid":"'$TXA_TXID'","vout":<vault_vout>}]' \
   '{"BOB_R_ADDRESS":9.9999}' \
   $LOCKTIME > /tmp/txb_unsigned.hex
 
-# Cosign as above
-# ... (same pattern)
-
-# Resulting hex held by BOB (the lender)
+# Cosign as above with SIGHASH_SINGLE|ANYONECANPAY
+# Final hex held by BOB (the lender)
 ```
 
-**Tx-C template** (optional, far-future locktime, output to borrower).
+**Tx-C template** (optional, far-future locktime, output to borrower) — same pattern with a long-tail `nLockTime` for catastrophic recovery.
 
-### Step 4 — Active loan period
+### Phase 5 — Active period + settlement
 
-Nothing happens on chain. Both parties hold their hex. Borrower uses the principal.
+During the loan term, nothing happens on chain. Both parties hold their respective hex.
 
-### Step 5a — Happy path: borrower repays
+**5a. Happy path: borrower repays**
 
-Any time before `expiryheight` of Tx-Repay:
+Any time before Tx-Repay's `expiryheight`:
 
 ```bash
 # Alice broadcasts the pre-signed Tx-Repay as-is
 verus sendrawtransaction $(cat /tmp/tx_repay_template.hex)
 ```
 
-That's it. Pure CLI, no extension needed (since the collateral-pays-fee model has Output 1 fixed at origination). Lender receives 5.5 VRSC; borrower's collateral comes back via Output 1.
+Pure CLI, no extension needed. Lender receives 5.5 VRSC; borrower's collateral comes back via the change output (collateral - tx fee).
 
-### Step 5b — Default path: lender claims after maturity
+**5b. Default path: lender claims after maturity**
 
 After block `LOCKTIME` (maturity + grace):
 
@@ -168,17 +204,15 @@ After block `LOCKTIME` (maturity + grace):
 verus sendrawtransaction $(cat /tmp/tx_b_template.hex)
 ```
 
-Pure CLI. Lender claims 9.9999 VRSC; borrower's collateral is gone.
+Pure CLI. Lender claims `collateral - fee`; borrower's collateral is gone.
 
 ---
 
-## Walkthrough — non-VRSC collateral or broadcaster-pays-fee variants
+## Walkthrough — broadcaster-pays-fee variant
 
-These need the helper script for the broadcast step. Recipe steps 1, 3, 5a/5b are identical to above; only the broadcast step differs.
+If the broadcaster wants the **full** counter-asset returned (not `amount - fee`), they extend the pre-signed template with their own VRSC fee inputs. This is the only place a helper script is required.
 
-**Step 5a alternative (broadcaster-pays-fee):**
-
-Borrower wants the FULL collateral back (not `collateral - fee`). They attach their own VRSC fee input at broadcast time:
+**Phase 5 alternative (broadcaster-pays-fee Tx-Repay):**
 
 ```bash
 python3 helpers/extend_tx.py \
@@ -192,7 +226,7 @@ verus signrawtransaction $(cat /tmp/tx_repay_extended.hex) > /tmp/tx_repay_signe
 verus sendrawtransaction $(jq -r .hex /tmp/tx_repay_signed.json)
 ```
 
-For non-VRSC collateral (Profile V vault holding DAI etc.), the broadcaster-pays-fee variant is REQUIRED because the vault has no VRSC for fees. Same helper script handles it.
+For non-VRSC collateral (Profile V vault holding DAI etc.), broadcaster-pays-fee is required because the vault has no VRSC for the broadcast tx fee. Same helper handles it.
 
 ---
 
@@ -200,15 +234,14 @@ For non-VRSC collateral (Profile V vault holding DAI etc.), the broadcaster-pays
 
 | Phase | Pure CLI? |
 |---|---|
-| Step 1: vault derivation | ✅ `createmultisig` |
-| Step 2: origination | ✅ `createrawtransaction` + cooperative `signrawtransaction` |
-| Step 3: pre-sign templates | ✅ `signrawtransaction null null "SINGLE\|ANYONECANPAY"` |
-| Step 5a: collateral-pays-fee Tx-Repay broadcast | ✅ `sendrawtransaction <hex>` |
-| Step 5a: broadcaster-pays-fee Tx-Repay broadcast | ❌ needs `helpers/extend_tx.py` |
-| Step 5b: collateral-pays-fee Tx-B broadcast | ✅ `sendrawtransaction <hex>` |
-| Step 5b: broadcaster-pays-fee Tx-B broadcast | ❌ needs `helpers/extend_tx.py` |
+| Phase 1: discovery (post offer to multimap) | ✅ `updateidentity` |
+| Phase 2: coordination (vault derivation) | ✅ `createmultisig` (Profile L); Profile V needs sub-ID registration |
+| Phase 3: atomic origination Tx-A | ✅ `createrawtransaction` + cooperative `signrawtransaction` |
+| Phase 4: pre-sign templates | ✅ `signrawtransaction null null "SINGLE\|ANYONECANPAY"` |
+| Phase 5: collateral-pays-fee broadcast (Tx-Repay or Tx-B) | ✅ `sendrawtransaction <hex>` |
+| Phase 5: broadcaster-pays-fee broadcast | ❌ needs `helpers/extend_tx.py` |
 
-For a purely VRSC-collateralized loan accepting the small fee deduction, **everything is pure stock CLI**.
+For a loan accepting the small fee deduction from collateral, **everything is pure stock CLI** — any currencies, any vault flavor.
 
 ---
 
@@ -230,10 +263,10 @@ In a Verus Wallet V2 implementation, all of the above is hidden behind UI. The u
 ```
 
 The wallet:
-1. Reads VerusID multimaps for `loan.offer.v1` entries (see [marketplace.md](./marketplace.md))
-2. Renders offers with reputation summary
+1. Reads VerusID multimaps for `vrsc::contract.loan.offer` entries (see [marketplace.md](./marketplace.md))
+2. Renders offers with reputation summary aggregated from `vrsc::contract.loan.history` entries
 3. On "Accept", coordinates the multi-step ceremony via encrypted multimap entries
-4. Stores templates as encrypted multimap entries on user's own VerusID
+4. Stores templates as encrypted multimap entries on user's own VerusID for seed-recovery
 5. Displays "Repay" button when active; broadcasts Tx-Repay
 6. Shows outcome in user's loan history after settlement
 
@@ -245,10 +278,10 @@ All complexity is hidden. User clicks two buttons total.
 
 ### Key risks
 
-1. **Lost templates** — if a party loses the pre-signed hex AND doesn't have multimap backup, they can't broadcast. Mitigation: store templates encrypted in own VerusID's multimap (Profile V) for seed-recovery.
-2. **Predicted txid mismatch** — if Tx-A's actual txid differs from predicted (rare with deterministic ECDSA), the templates reference a non-existent UTXO and won't broadcast. Mitigation: abort and restart the ceremony.
-3. **Validate received templates before signing** — when Alice receives Bob's pre-signed Tx-Repay template, her wallet MUST validate that Output 0 has the correct amount and is paying the agreed lender. The chain enforces what's signed; the wallet verifies what gets signed.
-4. **Cross-currency tooling caveat** — for non-VRSC collateral inputs in templates, signing requires `signrawtransaction null null "SINGLE|ANYONECANPAY"` (the wallet key-lookup path). Explicit-key path fails. See [TESTING §32](../TESTING.md).
+1. **Lost templates** — if a party loses the pre-signed hex AND doesn't have multimap backup, they can't broadcast. Mitigation: store templates encrypted in own VerusID's multimap (`vrsc::contract.loan.template`) for seed-recovery.
+2. **Predicted txid mismatch** — if Tx-A's actual txid differs from what the templates referenced (rare with deterministic ECDSA), the templates point at a non-existent UTXO and won't broadcast. Mitigation: abort and restart the ceremony if Tx-A's txid changes after template signing.
+3. **Validate received templates before signing** — when one party receives the other's pre-signed Tx-Repay or Tx-B template, the wallet MUST verify Output 0 has the agreed amount and is paying the agreed party. The chain enforces what's signed; the wallet must verify what gets signed.
+4. **Cross-currency tooling caveat** — for non-VRSC inputs in templates, signing requires `signrawtransaction null null "SINGLE|ANYONECANPAY"` (the wallet key-lookup path). Explicit-key path fails. See [TESTING §32](../TESTING.md).
 
 ### What's chain-enforced (not trust)
 
@@ -258,16 +291,16 @@ All complexity is hidden. User clicks two buttons total.
 - Settlement is atomic — either Tx-Repay or Tx-B, never both (validated §22, §29)
 - Lender stonewalling at repayment is structurally impossible — the pre-signature settles unilaterally
 
-### What still requires off-chain trust
+### What still requires off-chain trust (or chain-native equivalents)
 
-- Identifying the counterparty in the first place (or use reputation — see [marketplace.md](./marketplace.md))
-- Agreeing on terms before origination
-- Subjective dispute resolution (use real-world courts; chain is admissible evidence)
+- **Counterparty discovery** — solved by VerusID multimap + reputation (`vrsc::contract.loan.history`)
+- **Agreeing on terms before origination** — discovery + acceptance handshake covers this
+- **Subjective dispute resolution** — use real-world courts; chain is admissible evidence
 
 ---
 
 ## References
 
-- [SPEC.md Part I](../SPEC.md) — formal protocol specification
+- [SPEC.md](../SPEC.md) — formal protocol specification
+- [SCHEMA.md](../SCHEMA.md) — canonical VDXF keys + payload schemas
 - [TESTING.md §16-§32](../TESTING.md) — mainnet validations of every primitive
-- Test txids: §16 `286ba62f...`, §18 `25564b4c...`, §22 (rejection), §32 `086fb3ee...`
