@@ -14,10 +14,25 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 
 ## What's here
 
-- **[SPEC.md](./SPEC.md)** — formal protocol specification (validated)
-- **[TESTING.md](./TESTING.md)** — empirical test results from Verus mainnet, with txid references
-- **[diagram.svg](./diagram.svg)** — step-by-step protocol lifecycle diagram
+- **[SPEC.md](./SPEC.md)** — formal protocol specification (v1.0)
+- **[TESTING.md](./TESTING.md)** — empirical test results from Verus mainnet (36 scenarios, txid references)
+- **[recipes/](./recipes/)** — practical how-to guides per use case (lending, options, swap, escrow, marketplace)
+- **[helpers/](./helpers/)** — short Python utilities supporting the recipes
+- **[BRIEF.md](./BRIEF.md)** — single-page summary
+- **[SCENARIOS.md](./SCENARIOS.md)** — full scenario test matrix
+- **[diagram.svg](./diagram.svg)** — protocol lifecycle diagram
+- **[twitter/](./twitter/)** — 8-card visual explainer (1200×675 PNGs)
 - **[LICENSE](./LICENSE)** — MIT
+
+The same primitive (SIGHASH_SINGLE|ANYONECANPAY pre-commit) supports multiple use cases:
+
+| Use case | Recipe | Purely CLI? |
+|---|---|---|
+| Lending (collateralized loans) | [recipes/lending.md](./recipes/lending.md) | partial — VRSC-only loans yes; cross-currency needs helper |
+| Options markets | [recipes/options.md](./recipes/options.md) | setup yes; exercise needs helper |
+| Atomic p2p currency swaps | [recipes/swap.md](./recipes/swap.md) | ✅ pure CLI |
+| Escrow (time-locked, multi-party) | [recipes/escrow.md](./recipes/escrow.md) | depends on pattern |
+| Marketplace data layer | [recipes/marketplace.md](./recipes/marketplace.md) | ✅ pure CLI |
 
 ## Status
 
@@ -105,6 +120,17 @@ Lender disappeared:
 Three settlement paths total. No mutual-deadlock state ever exists. Either the loan is settled (Tx-Repay), defaulted (Tx-B), or rescued (Tx-C, rare).
 
 See [SPEC.md](./SPEC.md) for the full protocol.
+
+## Wallet integration
+
+The recipes are written so they can be run from a stock Verus daemon, but the natural home for this protocol is a wallet. The recipes' multi-step ceremonies (origination, cooperative pre-signing, template storage, exercise/repay, expiration) map cleanly onto wallet UX:
+
+- **Posting / browsing offers** → marketplace tab reading VerusID `loan.offer.v1` multimap entries (see [marketplace.md](./recipes/marketplace.md))
+- **Origination ceremony** → coordinated via encrypted multimap entries between counterparties
+- **Template storage** → encrypted in user's own VerusID multimap, recoverable from seed
+- **Repay / exercise / claim** → one-click broadcast of pre-signed templates
+
+Verus Wallet V2 (Chrome extension, non-custodial, direct daemon RPC) is the reference target. The `extend_tx.py` helper logic (~80 lines of tx serialization) ports directly to the wallet's TypeScript codebase. The recipes serve as both a runnable reference for power users and the spec a wallet implementor would follow.
 
 ## Relationship to other Verus lending efforts
 
