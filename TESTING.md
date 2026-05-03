@@ -531,6 +531,67 @@ The options primitive is **the same building block as the loan primitive, with `
 
 After expiration (block ≥ 4050321), the exercise tx becomes unbroadcastable (`tx-expiring-soon` rejection — already validated in §F1 cleanup). Writer's separate "underlying-return" tx with `nLockTime = expiration+1` recovers the underlying. (Underlying-return path validated by extension; same nLockTime mechanic as Tx-B in §17, §19, §21.)
 
+### 27. Options primitive — expired-and-recovered path
+
+Companion to §26. Validates that an unexercised option correctly expires and the writer recovers the underlying. Closes the lifecycle.
+
+**Setup — premium paid first, then underlying locked:**
+- Premium: `22eea6d0554d00e36feee947320fee75822a172267c97e103f4491536450d54f` (Alice → Bob, 0.05 DAI)
+- Underlying lock: `3f59d6635be79b6b67ef31b08b898487a652ad9fb639c851203c8e6200893913` (Bob → vault, 0.5 VRSC at vout 1)
+
+**Cooperative pre-sign of two templates:**
+
+*Exercise template* (held by Alice, the buyer):
+- Input 0: vault's 0.5 VRSC UTXO (signed `SIGHASH_SINGLE | ANYONECANPAY` by both)
+- Output 0: 0.5 DAI → Bob (sig-locked, the strike)
+- expiryheight: block 4050336 (5 blocks after pre-signing)
+
+*Underlying-return template* (held by Bob, the writer):
+- Input 0: same vault UTXO (signed `SIGHASH_SINGLE | ANYONECANPAY` by both)
+- Output 0: 0.5 VRSC → Bob (sig-locked, recovery)
+- nLockTime: block 4050337 (1 block after exercise expires)
+
+**Phase 1 — Alice does NOT exercise.** Lets the option expire.
+
+**Phase 2 — Test expired-exercise rejection (block 4050338, past expiry):**
+- Attempted broadcast of exercise template on local node:
+- Result: `error code: -26, tx-expiring-soon: expiryheight is 4050336 but should be at least 4050344 to avoid transaction expiring soon`
+- Same rejection on .44 ✅
+- Verus enforces an 8-block buffer past expiryheight; once reached, the tx is dead
+
+**Phase 3 — Bob recovers underlying (post nLockTime):**
+- Bob extended underlying-return template: added Input 1 (his 0.35 VRSC fee budget UTXO) and Output 1 (0.3499 VRSC change)
+- Signed Input 1 with `SIGHASH_ALL`
+- Tx: `4c53edf63f85dc370d2ba3aec97bced6fe33445bf8693cf5a1c84ccf9b9331d8`
+- Confirmed cleanly
+
+**Final state:**
+- Vault: 0.5 VRSC consumed by return tx (vault still holds 4 VRSC from prior unrelated tests)
+- Bob: +0.5 VRSC underlying recovered + 0.05 DAI premium kept (Alice's premium became Bob's profit for taking on the option-writing obligation)
+- Alice: -0.05 DAI premium (sunk cost of holding the option that wasn't exercised)
+- Fee: 0.0001 VRSC paid by Bob's broadcast input
+
+**Validates:**
+- ✅ `expiryheight` enforcement on pre-signed exercise tx — broadcast attempt rejected once block ≥ expiryheight (with 8-block buffer)
+- ✅ Writer's underlying-return tx with `nLockTime > expiryheight` broadcasts cleanly post-expiration
+- ✅ The same UTXO can be the spend target of multiple pre-signed alternative txs (exercise OR return); whichever broadcasts first consumes it
+- ✅ Premium economics: writer keeps premium regardless of exercise — this is the writer's compensation for locking up underlying
+- ✅ Pay-first ordering enforced naturally — buyer's premium is a separate confirmed tx before the option becomes "active" (the underlying lock + pre-signed templates exist)
+
+**Why this matters:**
+
+§26 + §27 together cover the **full options lifecycle**: pre-paid premium, atomic exercise OR atomic expiration, writer recovery on no-exercise. With §24's tampering rejection (Output 0 amount/recipient locked), the chain enforces all the load-bearing properties an options market needs:
+
+- Buyer cannot underpay strike (§24 D2)
+- Buyer cannot redirect strike payment (§24 D1)
+- Buyer cannot exercise after expiration (§27)
+- Writer cannot reclaim underlying before expiration (would fail nLockTime)
+- Writer cannot rug-pull (underlying is at 2-of-2 vault)
+- Writer keeps premium whether or not buyer exercises (§27)
+- Atomic strike-for-underlying delivery on exercise (§26)
+
+This is a complete, oracle-free, custodian-free options primitive on Verus today using only existing transparent transaction features.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)

@@ -84,6 +84,7 @@ Vault: `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne` (p2sh, no VerusID)
 | 24 | Output 0 tampering (D1 recipient, D2 amount) rejected | ✅ — `mandatory-script-verify-flag-failed` | (rejected) |
 | 25 | **Tx-O atomic-swap origination** | ✅ | `023d3256...` |
 | 26 | **Options primitive: pre-paid premium + atomic exercise + expiryheight** | ✅ confirmed | `f48ba0c3...` (block `0000000000004a0c...`) |
+| 27 | **Options expired path: rejection + writer recovers underlying** | ✅ confirmed | `4c53edf6...` (return); exercise-attempt rejected `tx-expiring-soon` |
 
 ### What this proves
 
