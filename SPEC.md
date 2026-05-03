@@ -502,9 +502,11 @@ Profile L lacks on-chain storage for loan terms. Keep a signed copy off-chain (e
 
 **Practical recommendation:** Make collateral VRSC-valued. Principal, interest, and repayment can be any currency. This matches every validated test (§16-§30) and preserves all of the protocol's load-bearing properties.
 
-**Workaround for non-VRSC collateral with async settlement (untested):** include a small VRSC dust value in the vault output alongside the reserve currency. The mixed-currency output may give the SIGHASH_SINGLE signer the VRSC anchor it needs. Worth a follow-up validation; not currently a recommended path.
+**Tested workaround that DOES NOT work:** mixing VRSC dust into the vault output (e.g. `0.01 VRSC + 5 DAI` instead of `5 DAI` alone) does not unblock SIGHASH_SINGLE pre-signing. Validated mainnet (TESTING.md §31 + follow-up): same `Opcode missing or not understood` error regardless of whether the cryptocondition output also carries VRSC value. The issue is the reserve-transfer opcode itself, not the input's VRSC value.
 
-For non-VRSC collateral when async settlement isn't required (e.g. parties are willing to coordinate at maturity): use Profile V vault + cooperative SIGHASH_ALL settlement.
+For non-VRSC collateral when async settlement isn't required (e.g. parties are willing to coordinate at maturity): use Profile V vault + cooperative SIGHASH_ALL settlement. Validated §31.
+
+The clean position: **collateral in VRSC** preserves all of the protocol's async-pre-sign properties for any-currency principal/repayment.
 
 ### LTV (loan-to-value) recommendations
 

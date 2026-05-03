@@ -714,7 +714,7 @@ Attempt 2: vault = VerusID `i6ebrehQ6dyJGjy8LoxkaPfJ2Vo7dXGbHy` (Profile V).
 - ✅ Cross-currency loans with **VRSC collateral + non-VRSC principal/repayment** = works fully (§18-§21)
 - ⚠️ **Non-VRSC-only collateral** = settlement requires cooperative SIGHASH_ALL (both parties online) — loses the unilateral-broadcast property of the canonical primitive
 - ❌ **Profile L vault + non-VRSC collateral** = impossible (non-standard output rejected at broadcast)
-- 🔮 **Workaround (untested): mixed-currency vault output** with small VRSC dust + reserve, may allow SIGHASH_SINGLE|ANYONECANPAY signing because the input has a VRSC anchor. Worth a follow-up validation.
+- ❌ **Tested workaround that does NOT work:** mixed-currency vault output (0.01 VRSC + 1 DAI) at i-address vault `i6ebreh...`, tx `d4d518f6e814cd1df8bee421f2f593cedcf88661ed9ff6b05f4de9cdb3ca2dec`. Attempted SIGHASH_SINGLE|ANYONECANPAY signing with VRSC value in the output → still fails with `Opcode missing or not understood`. The issue is the reserve-transfer cryptocondition opcode itself, not the input's VRSC value. **Adding dust does not unlock async pre-sign for reserve-currency vaults.**
 
 For the canonical loan design, the recommendation is unchanged: **collateral in VRSC, principal/repayment in any currency**. This matches all existing validated tests (§16-§30).
 
