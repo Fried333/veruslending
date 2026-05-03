@@ -849,6 +849,60 @@ For atomic swaps with single-party-signed inputs (origination Tx-O, default Tx-B
 
 A small Verus core enhancement (`cosignoffer` RPC, `extendrawtransaction` RPC, or `makeoffer` with optional privkeys param) would unlock pure-CLI Tx-Repay too. See [DEV_ASK.md](./DEV_ASK.md).
 
+### 35. Finding: makeoffer's expiryheight does NOT gate the take window
+
+Tested whether `makeoffer`'s `expiryheight` parameter prevents `takeoffer` after that block height. **It does not** — `expiryheight` on makeoffer is the offer-tx's broadcast expiry, governing when the offer tx itself can be admitted to mempool. After confirmation, the offer's outputs are spendable (takeable) indefinitely until taken or `closeoffers` cancels them.
+
+**Setup:**
+- Bob's offer with `expiryheight = current+5` (block 4050458): tx `35c90cce02d98bd6d9ce069833eccb9638015e47c6bf39fffa51693252d0bdb0`
+- Confirmed before its expiryheight
+
+**Test:**
+- Waited until block 4050460 (past offer's expiryheight 4050458)
+- Alice ran `takeoffer` with the offer's txid
+- Result: **take succeeded**, tx `190c80ad4aa6127cccb56f25828b348c7556815fa804bc78c8999151a13523f6` confirmed in block 0000000000001dcc95b0ce8d0be4fccfbad85975eb8328f2df3d404a7af4946a
+
+**Implications:**
+- Stock `makeoffer` cannot natively express "this offer auto-expires at block X" semantics
+- Marketplace offers are takeable until taken or canceled, regardless of their tx-creation expiryheight
+- For options markets requiring true expiration, use 2-of-2 vault + pre-signed exercise tx with `expiryheight` (validated §26-§27) — that's the working mechanism for time-limited exercise rights
+- Or use `expiryheight` on the OFFER TX itself + accept that the offer simply broadcasts late from a stale hex (limited utility)
+
+This caveats the "trusted-seller options via stock makeoffer" framing in earlier conversation. For real options markets with expiration, the protocol's 2-of-2 vault + pre-signed exercise tx is the correct mechanism.
+
+### 36. Atomic premium-plus-option-creation pattern
+
+Validates that `takeoffer`'s `accept` field can deliver to a 2-of-2 vault address (not just a buyer's R-address). This unlocks an atomic premium-plus-option-creation primitive: in a single tx, premium goes to seller AND underlying lands at vault. No separate premium-then-deposit sequence.
+
+**Setup:**
+- Bob's offer: `6960174a51a57afa6eee14cc8298c251561260f4cadcbcf787e4cb5e02c3fcba` — GIVE 0.05 VRSC, FOR 0.05 DAI to seller
+- Alice's takeoffer with `accept.address = bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne` (the 2-of-2 vault)
+
+**Result:**
+- Tx: `c419b7fcc001a9e6993112be1e6e6d817928beda9a86867d57a840592ff0bb3c`
+- Confirmed in block `000000000001a8a2c049615dfc131c2a775c20b870d71dd30e70307dade05eb5`
+- vout 0: 0.05 DAI → seller (premium delivered)
+- vout 1: 0.05 VRSC → vault (underlying locked at 2-of-2)
+- vout 2: change
+
+Vault balance increased from 4.0 to 4.05 VRSC. Atomic. Pure stock CLI.
+
+**Validates:**
+- ✅ takeoffer's `accept` accepts p2sh vault addresses (not just R-addresses)
+- ✅ Atomic premium-plus-option-creation pattern works on stock Verus CLI
+- ✅ Eliminates the "buyer pays premium first, seller doesn't deliver" trust risk
+- ✅ Combined with pre-signed exercise/return txs (§26-§27), enables a fully-trustless options market: chain enforces both premium handling AND no-rug-pull
+
+**Practical implication:**
+
+For options markets, the recommended pattern is:
+1. **Setup phase**: cooperative atomic tx via makeoffer/takeoffer with vault as accept address — premium → seller, underlying → vault. **Pure stock CLI.**
+2. **Pre-signed exercise + return**: cooperative pre-sign of the settlement templates with `SIGHASH_SINGLE | ANYONECANPAY` — needs the wallet key-lookup signing path (§32). Pure CLI.
+3. **Exercise broadcast**: borrower extends template with strike input. **Needs extension helper** (same gap as Tx-Repay).
+4. **Expiration recovery**: seller extends underlying-return template with fee input. **Needs extension helper** (same gap as Tx-B).
+
+Three of four phases are pure stock CLI. One gap remains — the same gap as the lending protocol's Tx-Repay.
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)

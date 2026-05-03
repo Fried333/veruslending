@@ -1,6 +1,6 @@
 # VerusLending — Protocol Specification v1.0
 
-**Status:** Chain-level mechanics fully validated on Verus mainnet (34 test scenarios — see [TESTING.md](./TESTING.md) for txids). Reference wallet implementation is v1.x roadmap, outside the spec.
+**Status:** Chain-level mechanics fully validated on Verus mainnet (36 test scenarios — see [TESTING.md](./TESTING.md) for txids). Reference wallet implementation is v1.x roadmap, outside the spec.
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 

@@ -92,6 +92,8 @@ Vault: `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne` (p2sh, no VerusID)
 | 32 | **H1 corrected: non-VRSC collateral works with SIGHASH_SINGLE\|ANYONECANPAY** (wallet key-lookup path required) | ✅ confirmed | `086fb3ee...` |
 | 33 | **Marketplace data layer — loan offer in contentmultimap, readable from any node** | ✅ confirmed | `694ed5cf...` |
 | 34 | **Cross-currency `makeoffer`/`takeoffer` atomic swap (pure CLI)** | ✅ confirmed | `f2ce9faa...` |
+| 35 | makeoffer expiryheight does NOT gate the take window (finding) | post-expiry take succeeded | `190c80ad...` |
+| 36 | **Atomic premium-plus-option pattern (vault as takeoffer accept)** | ✅ confirmed | `c419b7fc...` |
 
 ### What this proves
 
