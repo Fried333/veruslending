@@ -802,6 +802,53 @@ The protocol doesn't need a marketplace operator. The **explorer's role is rende
 
 Combined with §13 (reputation) and §13.1 (encrypted multimap), the protocol's full lifecycle — discovery, ceremony coordination, settlement, reputation — runs entirely on chain. No off-chain infrastructure required.
 
+### 34. Cross-currency `makeoffer`/`takeoffer` validated for pure-CLI atomic swap
+
+Validates that Verus's marketplace primitive (`makeoffer` + `takeoffer`) handles cross-currency atomic swaps via pure CLI. This is the same SIGHASH_SINGLE|ANYONECANPAY primitive as our protocol, exposed via marketplace RPCs that handle extension natively (no helper script needed).
+
+**Setup — Bob offers VRSC for DAI:**
+```
+makeoffer "RHze..." '{
+  "changeaddress": "RHze...",
+  "offer": {"currency": "VRSC", "amount": 0.05},
+  "for":   {"address": "RHze...", "currency": "DAI.vETH", "amount": 0.1}
+}'
+```
+
+**Result:** offer broadcast tx `4baf95df0cec9fd415fa3daf8c1ee0853219606d460982bec0cc71f4552e2940`.
+
+**Take by txid (Alice on local node):**
+```
+takeoffer "RJ6Xejo..." '{
+  "changeaddress": "RJ6Xejo...",
+  "txid":   "4baf95df0cec9fd415fa3daf8c1ee0853219606d460982bec0cc71f4552e2940",
+  "deliver": {"currency": "DAI.vETH", "amount": 0.1},
+  "accept":  {"address": "RJ6Xejo...", "currency": "VRSC", "amount": 0.05}
+}'
+```
+
+**Result:** take tx `f2ce9faa20c72bb46d3678bde5f8f2a81eb600af2cc73c61d7e5656ea3875c7a`, confirmed in block `000000000000e8bac9180f2a5a493b686eba792bc3b488f833ba076f2923267c`.
+
+**Final state:**
+- Bob: +0.1 DAI received (the FOR clause)
+- Alice: +0.05 VRSC received (the OFFER clause)
+- Atomic, single tx
+
+**Validates:**
+- ✅ Cross-currency atomic swaps work via marketplace RPCs
+- ✅ Pure CLI sufficient (no Python helper, no extend_tx.py)
+- ✅ `takeoffer` handles tx extension natively when offer is on chain (taken by txid)
+- ✅ Same primitive as our SIGHASH_SINGLE|ANYONECANPAY — exposed via marketplace API
+
+**One important caveat:**
+- ❌ `takeoffer` with the `tx:<hex>` form (off-chain offer hex) returned `mandatory-script-verify-flag-failed` on broadcast. The on-chain path (broadcast offer first, take by txid) was required. Off-chain hex passing requires further investigation or possibly the on-chain path is canonical.
+
+**Implication for the protocol:**
+
+For atomic swaps with single-party-signed inputs (origination Tx-O, default Tx-B, rescue Tx-C), `makeoffer`/`takeoffer` is a viable pure-CLI implementation. For Tx-Repay specifically — where the input is a 2-of-2 vault and both parties pre-sign at origination — the marketplace primitive doesn't directly support multi-sig pre-commitment.
+
+A small Verus core enhancement (`cosignoffer` RPC, `extendrawtransaction` RPC, or `makeoffer` with optional privkeys param) would unlock pure-CLI Tx-Repay too. See [DEV_ASK.md](./DEV_ASK.md).
+
 ## What remains untested (conservative assumptions)
 
 - Behavior of pre-signed transactions across chain reorganizations (G1–G3)

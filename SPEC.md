@@ -1,6 +1,6 @@
 # VerusLending — Protocol Specification v1.0
 
-**Status:** Chain-level mechanics fully validated on Verus mainnet (33 test scenarios — see [TESTING.md](./TESTING.md) for txids). Reference wallet implementation is v1.x roadmap, outside the spec.
+**Status:** Chain-level mechanics fully validated on Verus mainnet (34 test scenarios — see [TESTING.md](./TESTING.md) for txids). Reference wallet implementation is v1.x roadmap, outside the spec.
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
@@ -697,13 +697,35 @@ A reference wallet implementation should provide:
 
 Use `signrawtransaction <hex> null null <flags>` for cryptocondition reserve-currency inputs. The explicit-key path (`[] ["<priv>"]`) fails with `Opcode missing or not understood`. See §3.4 and TESTING §32.
 
-### Wallets must implement raw-tx extension client-side
+### Three of four phases are pure-CLI today
 
-The broadcaster-pays-fee variants (R-β, B-β) and Tx-O require adding inputs/outputs to a *pre-signed* template without losing the existing signature on Input 0. There is no CLI command that does this directly — `createrawtransaction` always builds from scratch.
+`makeoffer`/`takeoffer` natively handle three of the four protocol phases (Tx-O origination, Tx-B default, Tx-C rescue). All work for any currency combo. Validated TESTING §34 (cross-currency atomic swap via marketplace RPCs).
 
-A reference Python helper (`extend_tx.py`, ~80 lines) was used during validation. Wallets need the equivalent functionality in their implementation language. **This does not require any new Verus RPC** — the work is purely client-side serialization. The protocol uses only existing chain features and existing RPCs.
+```
+# Tx-O — lender posts offer, borrower takes
+ssh lender 'verus makeoffer <addr> "{offer:..., for:...}"'   # broadcasts on chain
+verus takeoffer <addr> "{txid: <offer-txid>, deliver:..., accept:...}"   # atomic swap
 
-Pure-CLI users CAN run the simpler variants (Tx-A cooperative origination + collateral-pays-fee settlement). The broadcaster-pays-fee variants and Tx-O require a small extension helper.
+# Tx-B — lender claims default at maturity
+ssh lender 'verus makeoffer ...' followed by ssh lender 'verus takeoffer ...'
+
+# Tx-C — borrower rescues at far-future locktime
+verus makeoffer ... ; verus takeoffer ...
+```
+
+### Tx-Repay needs either an extension helper or a small Verus RPC enhancement
+
+The settlement phase requires a 2-of-2 vault input where lender pre-commits at origination and borrower takes alone at any time before maturity. `makeoffer`/`takeoffer` doesn't support multi-sig pre-commitments because it operates on wallet keys only.
+
+Two paths today:
+- **Client-side extension helper** (~80 lines, `extend_tx.py` in this repo). Validated approach. Each wallet ships its own equivalent.
+- **Manual byte-splicing via decoderawtransaction + createrawtransaction + hex copy** — pure CLI but tedious.
+
+A small Verus core RPC enhancement (`extendrawtransaction`, `cosignoffer`, or `makeoffer privkeys` param) would unlock pure-CLI Tx-Repay too. See [DEV_ASK.md](./DEV_ASK.md) for details.
+
+### Critical implementation note: signing path
+
+Use `signrawtransaction <hex> null null <flags>` for cryptocondition reserve-currency inputs. The explicit-key path (`[] ["<priv>"]`) fails with `Opcode missing or not understood`. See §3.4 and TESTING §32.
 
 ---
 

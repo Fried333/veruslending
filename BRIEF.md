@@ -91,6 +91,7 @@ Vault: `bYCcAqB7KfdkfsN8YUipb2fuFhKvxmsnne` (p2sh, no VerusID)
 | 31 | H1 part 1: non-VRSC collateral via cooperative SIGHASH_ALL | ✅ confirmed | `a454afc2...` |
 | 32 | **H1 corrected: non-VRSC collateral works with SIGHASH_SINGLE\|ANYONECANPAY** (wallet key-lookup path required) | ✅ confirmed | `086fb3ee...` |
 | 33 | **Marketplace data layer — loan offer in contentmultimap, readable from any node** | ✅ confirmed | `694ed5cf...` |
+| 34 | **Cross-currency `makeoffer`/`takeoffer` atomic swap (pure CLI)** | ✅ confirmed | `f2ce9faa...` |
 
 ### What this proves
 
