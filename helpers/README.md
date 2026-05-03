@@ -61,15 +61,3 @@ serialize(tx_object) → hex
 
 For Verus Wallet V2 (JavaScript/TypeScript), this is a small module that ships with the wallet.
 
-## Future helpers
-
-If we add a high-level CLI wrapper (e.g., `verus_lend.py`), it would live here too, providing:
-
-```
-verus-lend lend post-offer ...
-verus-lend lend accept ...
-verus-lend lend repay ...
-verus-lend lend default ...
-```
-
-Bundling the multi-step recipes into single commands. Optional — the recipes work without it.

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>VerusLending</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>VerusLending</h1>
+    <nav>
+      <button data-section="positions" class="active">Positions</button>
+      <button data-section="marketplace">Marketplace</button>
+      <button data-section="settings">Settings</button>
+    </nav>
+    <div id="status">connecting…</div>
+  </header>
+
+  <main>
+    <section id="positions" class="section active">
+      <h2>Outstanding positions</h2>
+      <div id="positions-list"></div>
+    </section>
+
+    <section id="marketplace" class="section">
+      <h2>Marketplace</h2>
+      <div class="card">
+        <label>Browse offers under parent ID</label>
+        <div class="row">
+          <input id="mp-parent" placeholder="lend@" />
+          <button class="primary" id="mp-load" style="flex:0 0 auto">Load</button>
+        </div>
+        <div id="mp-results" style="margin-top:16px"></div>
+      </div>
+    </section>
+
+    <section id="settings" class="section">
+      <h2>Settings</h2>
+      <div class="card">
+        <label>My VerusID (used for posting offers / writing history)</label>
+        <input id="set-myid" placeholder="alice.you@" />
+        <label>My R-address (for signing / change)</label>
+        <input id="set-myaddr" placeholder="R…" />
+        <label>My compressed pubkey (used in vault derivation)</label>
+        <input id="set-mypub" placeholder="03…" />
+        <div class="row" style="margin-top:12px">
+          <button class="primary" id="set-save" style="flex:0 0 auto">Save</button>
+          <span id="set-msg" style="color:var(--muted);font-size:12px"></span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
