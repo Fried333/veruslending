@@ -21,7 +21,6 @@ VerusLending is a credit primitive built from existing Verus features: 2-of-2 mu
 - **[BRIEF.md](./BRIEF.md)** — single-page summary
 - **[SCENARIOS.md](./SCENARIOS.md)** — full scenario test matrix
 - **[diagram.svg](./diagram.svg)** — protocol lifecycle diagram
-- **[twitter/](./twitter/)** — 8-card visual explainer (1200×675 PNGs)
 - **[LICENSE](./LICENSE)** — MIT
 
 The same primitive (SIGHASH_SINGLE|ANYONECANPAY pre-commit) supports multiple use cases:
