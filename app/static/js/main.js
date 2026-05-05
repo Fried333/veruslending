@@ -270,12 +270,19 @@ async function buildAndSignBorrowerTxA({
   collateralCurrency,
   collateralAmount,
   vaultP2sh,
+  utxoAmount,    // optional — when caller already knows the UTXO size (e.g., just split it).
+                 //   Skips a getaddressutxos call (which doesn't see mempool).
 }) {
   const FEE = 0.0001;
-  // Look up the borrower's input UTXO size to compute change.
-  const utxos = await rpc("getaddressutxos", [{ addresses: [borrowerR], currencynames: true }]);
-  const u = utxos.find((x) => x.txid === borrowerInputTxid && x.outputIndex === borrowerInputVout);
-  if (!u) throw new Error(`UTXO ${borrowerInputTxid.slice(0, 16)}…:${borrowerInputVout} not found at ${borrowerR}`);
+  // Look up the borrower's input UTXO size to compute change — only if not provided.
+  if (utxoAmount === undefined) {
+    const utxos = await rpc("getaddressutxos", [{ addresses: [borrowerR], currencynames: true }]);
+    const u = utxos.find((x) => x.txid === borrowerInputTxid && x.outputIndex === borrowerInputVout);
+    if (!u) throw new Error(`UTXO ${borrowerInputTxid.slice(0, 16)}…:${borrowerInputVout} not found at ${borrowerR}`);
+    utxoAmount = collateralCurrency === "VRSC"
+      ? u.satoshis / 1e8
+      : parseFloat(u.currencyvalues?.[collateralCurrency] ?? 0);
+  }
 
   // Resolve currency iaddrs for non-native principal/collateral
   const ccyIaddr = async (name) => {
@@ -286,12 +293,15 @@ async function buildAndSignBorrowerTxA({
   const collateralCcyId = await ccyIaddr(collateralCurrency);
   if (!principalCcyId || !collateralCcyId) throw new Error("could not resolve currency ids");
 
-  // Borrower's change in the collateral currency (from the same UTXO)
-  const utxoAmount = collateralCurrency === "VRSC"
-    ? u.satoshis / 1e8
-    : parseFloat(u.currencyvalues?.[collateralCurrency] ?? u.currencyvalues?.[collateralCcyId] ?? 0);
-  const change = utxoAmount - collateralAmount - FEE;
-  if (change < 0) throw new Error(`UTXO too small: have ${utxoAmount} ${collateralCurrency}, need ${collateralAmount + FEE}`);
+  // Borrower's change in the collateral currency (from the same UTXO).
+  // Compare in integer satoshis to avoid float-precision bugs
+  // (0.5001 - 0.5 - 0.0001 ≈ -1e-17 in JS floats).
+  const utxoSats = Math.round(utxoAmount * 1e8);
+  const collateralSats = Math.round(collateralAmount * 1e8);
+  const feeSats = Math.round(FEE * 1e8);
+  const changeSats = utxoSats - collateralSats - feeSats;
+  if (changeSats < 0) throw new Error(`UTXO too small: have ${utxoSats} sats ${collateralCurrency}, need ${collateralSats + feeSats}`);
+  const change = changeSats / 1e8;
 
   // Outputs: order matters because lender will SIGHASH_SINGLE|ANYONECANPAY
   // input 0 → output 0 (principal). So output 0 = principal, output 1 = vault,
@@ -1097,6 +1107,11 @@ async function loadMarket() {
   rows.sort((a, b) => (tieScore(b) - tieScore(a)) || ((b.posted_block ?? 0) - (a.posted_block ?? 0)));
 
   if (myToken !== _marketLoadToken) return; // newer load wins
+  // Skip the wholesale innerHTML replacement if any row currently has an
+  // active operation panel open (post-match, accept, etc.). Otherwise the
+  // user's mid-flight click handler ends up writing to a detached DOM node.
+  const hasActiveOp = !!el.querySelector('.post-match-panel[data-op-active="1"], .accept-panel[data-op-active="1"]');
+  if (hasActiveOp) return;
   el.innerHTML = rows.map(render).join("");
 
   // For matches: enrich each row with the linked request's terms + lender's R-balance.
@@ -1551,6 +1566,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     const r = requestByKey.get(requestKey);
     const panel = row.querySelector(".post-match-panel");
     panel.style.display = "block";
+    panel.dataset.opActive = "1";   // marker so loadMarket can skip clobbering
     panel.innerHTML = `<div class="review muted">looking up your funding options…</div>`;
     try {
       let acting = actingIaddr();
@@ -2001,6 +2017,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     const matchKey = row.dataset.matchKey;
     const r = matchByKey.get(matchKey);
     const panel = row.querySelector(".accept-panel");
+    panel.dataset.opActive = "1";
     const resultEl = panel.querySelector(".accept-result") || panel;
     btn.disabled = true; btn.textContent = "Verifying match…";
     try {
@@ -2613,6 +2630,7 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
         collateralCurrency,
         collateralAmount,
         vaultP2sh: vault.address,
+        utxoAmount: splitAmount,  // we just split this exact amount — skip the lookup
       });
     } catch (e) {
       previewEl.innerHTML = `<div class="review" style="color:var(--bad)">✗ Tx-A build/sign failed: ${escapeHtml(e.message)}</div>`;
@@ -2694,26 +2712,79 @@ async function loadLoans() {
     return;
   }
 
-  const all = await Promise.all(
+  // Source 1: explorer's typed /contracts/loans/active feed
+  const explorerLoans = (await Promise.all(
     myIaddrs.map((ia) =>
       fetch(`${EXPLORER_API}/contracts/loans/active?iaddr=${encodeURIComponent(ia)}`)
         .then((r) => r.json())
         .then((j) => j.results || [])
         .catch(() => [])
     )
-  );
-  const flat = all.flat();
+  )).flat();
+
+  // Source 2: borrower-side localStorage. Every accept-v2 stashes Tx-Repay
+  // under `vl_tx_repay_<txAtxid>`. Parse loan.status entries on each
+  // local identity to pair them with on-chain context (loan_id, vault, etc.).
+  const localLoans = [];
+  for (const ia of myIaddrs) {
+    let info;
+    try { info = await rpc("getidentity", [ia]); } catch { continue; }
+    const cm = info?.identity?.contentmultimap || {};
+    const VDXF_LOAN_STATUS = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
+    for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
+      const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+      if (!hex) continue;
+      try {
+        const json = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+        if (!json?.active || json?.role !== "borrower" || !json?.loan_id) continue;
+        const txRepayHex = localStorage.getItem(`vl_tx_repay_${json.loan_id}`);
+        if (!txRepayHex) continue;
+        localLoans.push({
+          fullyQualifiedName: info.identity.fullyqualifiedname,
+          name: info.identity.name,
+          role: "borrower",
+          counterparty_iaddr: json.match_iaddr,
+          vault_address: json.vault_address,
+          vault_redeem_script: json.vault_redeem_script,
+          principal: json.principal,
+          collateral: json.collateral,
+          repay: json.repay,
+          maturity_block: json.maturity_block,
+          loan_id: json.loan_id,
+          tx_a_txid: json.loan_id,
+          tx_repay_local: true,
+        });
+      } catch {}
+    }
+  }
+
+  // De-dupe by loan_id (explorer + local may overlap)
+  const byId = new Map();
+  for (const r of explorerLoans) byId.set(r.loan_id || r.tx_a_txid, r);
+  for (const r of localLoans) {
+    const existing = byId.get(r.loan_id);
+    byId.set(r.loan_id, existing ? { ...existing, ...r } : r);
+  }
+  const flat = Array.from(byId.values());
+
   if (flat.length === 0) {
     const acting = actingIaddr();
+    // Don't wipe the list if a repay/claim op is mid-flight (the empty
+    // state would clobber the active card and detach .repay-result).
+    if (el.querySelector('.mp-row[data-op-active="1"]')) return;
     el.innerHTML = `<div class="empty">No active loans${acting !== "all" ? " for this identity" : " on any local identity"}.</div>`;
     return;
   }
+  // Skip wholesale re-render if any card has an active op panel open —
+  // otherwise the repay handler ends up writing to a detached node.
+  if (el.querySelector('.mp-row[data-op-active="1"]')) return;
   el.innerHTML = flat.map(renderActiveLoan).join("");
 }
 
 function renderActiveLoan(r) {
+  const hasRepay = r.role === "borrower" && r.tx_repay_local;
   return `
-    <div class="card">
+    <div class="card mp-row" data-loan-id="${escapeHtml(r.loan_id || r.tx_a_txid || "")}">
       <div class="row">
         <strong style="flex:1">${escapeHtml(r.fullyQualifiedName || r.name + "@")}</strong>
         <span class="badge ${r.role}">${escapeHtml(r.role)}</span>
@@ -2725,15 +2796,173 @@ function renderActiveLoan(r) {
         <div><span class="k">collateral</span><span class="v">${formatAmount(r.collateral)}</span></div>
         <div><span class="k">repay</span><span class="v">${formatAmount(r.repay)}</span></div>
         <div><span class="k">maturity</span><span class="v">block ${r.maturity_block ?? "?"}</span></div>
+        <div><span class="k">loan_id</span><span class="v"><code>${escapeHtml((r.loan_id || "—").slice(0, 20))}…</code></span></div>
       </div>
       <div class="row" style="margin-top:10px">
         ${r.role === "borrower"
-          ? `<button class="primary" disabled title="Phase C — broadcast pre-signed Tx-Repay">Repay</button>`
-          : `<button class="primary" disabled title="Phase C — broadcast Tx-B if past maturity">Claim collateral</button>`}
+          ? hasRepay
+            ? `<button class="primary" data-loan-act="repay">Repay</button>
+               <span class="muted" style="font-size:11px;margin-left:8px">Auto-splits a fresh repayment UTXO + extends Tx-Repay + broadcasts. Then posts loan.history (settled).</span>`
+            : `<button class="primary" disabled title="Tx-Repay not in this browser's localStorage — accept on this device or import the template">Repay</button>`
+          : `<button class="primary" disabled title="After maturity, GUI fetches Tx-B from borrower's loan.status, extends, broadcasts">Claim collateral</button>`}
       </div>
+      <div class="repay-result" style="margin-top:8px"></div>
     </div>
   `;
 }
+
+// Click handler for the active-loans list — Repay (and later Claim collateral).
+document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("[data-loan-act]");
+  if (!btn) return;
+  const card = btn.closest(".mp-row");
+  const loanId = card.dataset.loanId;
+  // Mark the card so loadLoans / picker-change re-renders can't clobber it.
+  card.dataset.opActive = "1";
+  const resultEl = card.querySelector(".repay-result");
+
+  if (btn.dataset.loanAct === "repay") {
+    btn.disabled = true; btn.textContent = "Loading Tx-Repay…";
+    try {
+      const txRepayHex = localStorage.getItem(`vl_tx_repay_${loanId}`);
+      if (!txRepayHex) throw new Error(`Tx-Repay for loan ${loanId.slice(0,16)}… not in localStorage`);
+
+      // Reload loan metadata from the borrower's loan.status entry
+      const acting = actingIaddr();
+      const idInfo = await rpc("getidentity", [acting]);
+      const cm = idInfo?.identity?.contentmultimap || {};
+      const VDXF_LOAN_STATUS = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
+      let status = null;
+      for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j.loan_id === loanId) { status = j; break; }
+        } catch {}
+      }
+      if (!status) throw new Error("loan.status entry not found on this identity");
+
+      const repayCcy = status.repay?.currency;
+      const repayAmt = parseFloat(status.repay?.amount);
+      if (!repayCcy || !repayAmt) throw new Error("loan.status missing repay terms");
+
+      const borrowerR = (idInfo.identity.primaryaddresses || [])[0];
+      btn.textContent = "Splitting fresh repayment UTXO…";
+      // Auto-split a clean UTXO of (repay amount + 0.0001 fee buffer).
+      const splitOut = repayCcy === "VRSC"
+        ? [{ address: borrowerR, amount: repayAmt + 0.0001 }]
+        : [{ currency: repayCcy, amount: repayAmt + 0.0001, address: borrowerR }];
+      const opid = await rpc("sendcurrency", [borrowerR, splitOut]);
+      let splitTxid;
+      for (let i = 0; i < 30 && !splitTxid; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const op = (await rpc("z_getoperationresult", [[opid]]))[0];
+        if (op?.status === "success") splitTxid = op.result?.txid;
+        if (op?.status === "failed") throw new Error("split failed: " + JSON.stringify(op.error || {}));
+      }
+      if (!splitTxid) throw new Error("split timed out");
+
+      // Find new clean UTXO in the split tx (mempool)
+      const splitTx = await rpc("getrawtransaction", [splitTxid, 1]);
+      const repaySats = Math.round((repayAmt + 0.0001) * 1e8);
+      let splitVout = -1;
+      for (let i = 0; i < (splitTx?.vout || []).length; i++) {
+        const o = splitTx.vout[i];
+        const spk = o?.scriptPubKey || {};
+        if (!(spk.addresses || []).includes(borrowerR)) continue;
+        const cv = spk.reserveoutput?.currencyvalues || {};
+        const cvKeys = Object.keys(cv);
+        if (repayCcy === "VRSC") {
+          if (cvKeys.length === 0 && o.valueSat === repaySats) { splitVout = i; break; }
+        } else {
+          // Allow tiny float tolerance — compare via integer satoshis would need ccy lookup
+          if (o.valueSat === 0 && cvKeys.length === 1 && Math.round(parseFloat(Object.values(cv)[0]) * 1e8) === repaySats) { splitVout = i; break; }
+        }
+      }
+      if (splitVout < 0) throw new Error("split tx didn't produce a clean repayment output");
+
+      btn.textContent = "Extending Tx-Repay…";
+      // Extend Tx-Repay: append borrower's repayment input + collateral-return output.
+      // SIGHASH_SINGLE|ANYONECANPAY on input 0 (vault) commits to output 0 only,
+      // so we can freely add input 1 + outputs.
+      const tx = _parseTx(txRepayHex);
+      const txidLE = _hexToBytes(splitTxid).reverse();
+      tx.vins.push({ prevTxid: txidLE, prevVout: splitVout, scriptSig: new Uint8Array(0), sequence: 0xffffffff });
+      // Add output 1: collateral-return → borrower
+      const collateralCcy = status.collateral?.currency;
+      const collateralAmt = parseFloat(status.collateral?.amount);
+      const collateralSats = Math.round(collateralAmt * 1e8);
+      if (collateralCcy === "VRSC") {
+        // P2PKH to borrower's R
+        tx.vouts.push({ value: BigInt(collateralSats), scriptPubKey: _addrToP2pkhSpk(borrowerR) });
+      } else {
+        throw new Error(`non-VRSC collateral return at repay not wired yet (${collateralCcy})`);
+      }
+      const extendedHex = _serializeTx(tx);
+
+      btn.textContent = "Signing borrower's input…";
+      const signed = await rpc("signrawtransaction", [extendedHex]);
+      if (!signed.complete) throw new Error("repay signing didn't complete: " + JSON.stringify(signed.errors || {}));
+
+      btn.textContent = "Broadcasting Tx-Repay…";
+      const repayBroadcastTxid = await rpc("sendrawtransaction", [signed.hex]);
+
+      // Post loan.history (settled = repaid) on borrower's identity for credit-score
+      btn.textContent = "Posting loan.history (settled)…";
+      const VDXF_LOAN_HISTORY = "i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb";
+      const historyPayload = {
+        version: 1,
+        role: "borrower",
+        loan_id: loanId,
+        outcome: "repaid",
+        tx_repay_txid: repayBroadcastTxid,
+        repaid_at_block: await rpc("getblockcount"),
+        principal: status.principal,
+        collateral: status.collateral,
+        repay: status.repay,
+        counterparty_iaddr: status.match_iaddr,
+      };
+      const historyHex = Array.from(new TextEncoder().encode(JSON.stringify(historyPayload)))
+        .map((b) => b.toString(16).padStart(2, "0")).join("");
+      const newCm = { ...cm };
+      newCm[VDXF_LOAN_HISTORY] = [...(newCm[VDXF_LOAN_HISTORY] || []), historyHex];
+      // Also flip the loan.status entry to inactive (active: false) so it stops showing up.
+      const updatedStatus = { ...status, active: false, repaid_tx: repayBroadcastTxid };
+      newCm[VDXF_LOAN_STATUS] = (newCm[VDXF_LOAN_STATUS] || []).map((e) => {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j.loan_id === loanId) {
+            return Array.from(new TextEncoder().encode(JSON.stringify(updatedStatus)))
+              .map((b) => b.toString(16).padStart(2, "0")).join("");
+          }
+        } catch {}
+        return hex;
+      });
+      const historyTxid = await rpc("updateidentity", [{
+        name: idInfo.identity.name,
+        parent: idInfo.identity.parent || "",
+        contentmultimap: newCm,
+      }]);
+
+      // Clear stored Tx-Repay (loan is settled)
+      try { localStorage.removeItem(`vl_tx_repay_${loanId}`); } catch {}
+
+      resultEl.innerHTML = `<div class="muted" style="color:var(--ok)">
+        ✓ Loan repaid:<br>
+        &nbsp;&nbsp;Tx-Repay: <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(repayBroadcastTxid)}" target="_blank"><code>${escapeHtml(repayBroadcastTxid)}</code></a><br>
+        &nbsp;&nbsp;loan.history: <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(historyTxid)}" target="_blank"><code>${escapeHtml(historyTxid.slice(0,20))}…</code></a><br>
+        &nbsp;&nbsp;Lender received repayment; collateral returned to you.
+      </div>`;
+      btn.style.display = "none";
+    } catch (e) {
+      resultEl.innerHTML = `<div class="muted" style="color:var(--bad)">✗ ${escapeHtml(e.message)}</div>`;
+      btn.disabled = false;
+      btn.textContent = "Retry repay";
+    }
+    return;
+  }
+});
 
 document.getElementById("loans-refresh").onclick = async () => {
   cachedSpendableIds = []; pickerByR = new Map();
