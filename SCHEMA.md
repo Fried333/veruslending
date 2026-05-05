@@ -27,11 +27,12 @@ Singular `contract` matches Verus's own convention (`system`, `profile`,
 
 | Key | VDXF id | Purpose | Visibility |
 |---|---|---|---|
-| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | lender's terms | public |
-| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | borrower's terms | public |
+| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | lender's rate sheet | public |
+| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | borrower's specific request | public |
+| `vrsc::contract.loan.match`     | `iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT` | lender's pre-signed funding offer for a specific request | public |
+| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | active loan state (per party) | public |
 | `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | settled outcome attestation | public |
-| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | active loan state | public |
-| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | acceptance handshake | encrypted |
+| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | acceptance handshake (legacy, superseded by loan.match) | encrypted |
 | `vrsc::contract.loan.template`  | `i7HCaxjju3QRYmbC23g5QD2smMk4PqaXFq` | pre-signed tx backup | encrypted (self) |
 | `vrsc::contract.option.offer`   | `i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY` | option writer's terms | public |
 | `vrsc::contract.option.history` | `iEdahQZgGRhECPfHTvb1P8C7y5LVaqKvjt` | option outcome | public |
@@ -103,65 +104,132 @@ decrypt with their seed-derived z-key.
 
 ## 3. Payload schemas
 
-### `contract.loan.offer` — lender posts terms
+### `contract.loan.offer` — lender posts a rate sheet
+
+A lender's *advertising material*: "I'll lend up to X, accepting these
+collateral currencies, requiring this collateralization, at this rate."
+Borrowers post `loan.request` against this; lenders pre-sign `loan.match`
+against specific requests they want to fund.
 
 ```json
 {
   "version": 1,
-  "type": "lend",
-  "principal":  { "currency": "VRSC", "amount": 5 },
+  "max_principal":        { "currency": "DAI", "amount": 100 },
+  "accepted_collateral":  ["VRSC", "DAI", "BTC"],
+  "min_collateral_ratio": 2.0,
+  "rate":                 0.01,
+  "term_days":            30,
+  "active":               true,
+  "memo":                 "optional human note"
+}
+```
+
+### `contract.loan.request` — borrower posts a specific request
+
+A borrower's exact terms: "I want to borrow X, willing to put up Y, will
+repay Z by maturity." No `max_rate` — the borrower pre-states the
+repayment they're willing to honor; the implied rate is `(repay/principal − 1)`.
+
+**v2 (current)** — adds the borrower's pre-signed Tx-A input plus the
+target lender. The borrower constructs the full Tx-A skeleton (their input,
+their change output, the principal output going to themselves, and the
+collateral output going to the 2-of-2 vault P2SH derived from both pubkeys)
+and signs their own input with `SIGHASH_ALL|ANYONECANPAY`. The lender can
+then add their own input and pre-sign all three settlement templates (Tx-A,
+Tx-Repay, Tx-B) in one shot at match-post time, then go offline forever.
+
+Required fields:
+- `target_lender_iaddr` — the borrower picked a specific lender to direct
+  this request at; the lender's pubkey is resolved from this iaddr's
+  primary R-address.
+- `borrower_input_signed_hex` — Tx-A skeleton hex with the borrower's
+  input signed `SIGHASH_ALL|ANYONECANPAY`. The hex contains:
+    - 1 input: borrower's collateral UTXO (signed)
+    - 3 outputs: principal → borrower's R, collateral → vault P2SH, change
+  The lender extends by adding input 0 (their principal UTXO) before
+  signing their own portion.
+
+```json
+{
+  "version": 2,
+  "principal":  { "currency": "DAI",  "amount": 5 },
   "collateral": { "currency": "VRSC", "amount": 10 },
-  "rate": 0.10,
-  "term_days": 30,
-  "lender_pubkey": "03...",
-  "lender_address": "R...",
-  "valid_until_block": 4070000,
-  "active": true,
-  "posted_block": 4050546,
-  "memo": "optional human note"
+  "repay":      { "currency": "DAI",  "amount": 5.05 },
+  "term_days":  30,
+  "target_lender_iaddr":      "i7A9fa…",
+  "borrower_input_signed_hex": "0400008085202f8901…",
+  "active":     true
 }
 ```
 
-### `contract.loan.request` — borrower posts request
+**v1 (legacy)** — terms only, no UTXO commitment, no signed input. Indexers
+and GUIs should still read v1 entries (older requests on chain remain valid),
+but matches against v1 requests can't be fully pre-signed — they need a
+cooperative cosigning handshake at accept time, which is an older flow not
+maintained here.
+
+### `contract.loan.match` — lender pre-signs a funding offer
+
+Posted on the lender's identity, points at a specific borrower's request,
+and contains all three pre-signed partial transactions needed for the
+borrower to atomically originate the loan with one click.
+
+The lender's principal UTXO is committed via `SIGHASH_SINGLE|ANYONECANPAY`
+on `tx_a_partial`. The lender's vault-half signatures on Tx-Repay and Tx-B
+templates ensure the loan can be settled cooperatively or defaulted on at
+maturity, even if the lender never comes online again.
 
 ```json
 {
   "version": 1,
-  "type": "borrow",
-  "principal_wanted":   { "currency": "VRSC", "amount": 5 },
-  "collateral_offered": { "currency": "VRSC", "amount": 10 },
-  "max_rate": 0.15,
-  "term_days": 30,
-  "borrower_pubkey": "03...",
-  "borrower_address": "R...",
-  "valid_until_block": 4070000,
-  "active": true,
-  "posted_block": 4050546
+  "request": {
+    "iaddr": "iFmi…goy",
+    "txid":  "5ea5ad…",
+    "block": 4051726
+  },
+  "lender_address":      "R...",
+  "vault_address":       "b...",
+  "vault_redeem_script": "<hex of OP_2 <lender_pubkey> <borrower_pubkey> OP_2 OP_CHECKMULTISIG>",
+  "tx_a_partial":        "<hex, lender input signed SIGHASH_SINGLE|ANYONECANPAY>",
+  "tx_repay_partial":    "<hex, lender vault-half signed SIGHASH_SINGLE|ANYONECANPAY>",
+  "tx_b_partial":        "<hex, lender vault-half signed SIGHASH_SINGLE|ANYONECANPAY, locktime=maturity>",
+  "expires_block":       4060000,
+  "active":              true
 }
 ```
 
-### `contract.loan.status` — active loan (one entry per role per loan)
+The lender's bound UTXO can be verified as still-unspent by checking
+on chain — explorer endpoints (`/api/contracts/loans/matches`) include
+this verification in their response so the borrower's wallet can flag
+stale matches.
 
-Posted at origination, removed/marked-settled at settlement.
+### `contract.loan.status` — active loan (one entry per role)
+
+Posted by both parties to their own identities after Tx-A confirms.
+The pair of entries (one per role) makes the loan publicly visible
+and correlatable. `loan_id` is the Tx-A txid (shared identifier).
 
 ```json
 {
   "version": 1,
-  "vault_address": "b...",
-  "role": "lender" | "borrower",
-  "counterparty_id": "alice.foo@",
-  "counterparty_address": "R...",
-  "counterparty_pubkey": "03...",
-  "principal":  { "currency": "VRSC", "amount": 5 },
-  "collateral": { "currency": "VRSC", "amount": 10 },
-  "rate": 0.10,
-  "term_days": 30,
-  "originated_tx": "...",
-  "originated_block": ...,
-  "maturity_block": ...,
-  "grace_blocks": 100
+  "loan_id":          "5e386061…cda4bd",
+  "role":             "lender" | "borrower",
+  "counterparty":     "i7A9…wg" | "iFmi…goy",
+  "vault_address":    "b...",
+  "principal":        { "currency": "VRSC", "amount": 5 },
+  "collateral":       { "currency": "VRSC", "amount": 10 },
+  "repay":            { "currency": "VRSC", "amount": 5.05 },
+  "term_days":        30,
+  "originated_block": 4051862,
+  "maturity_block":   4095062,
+  "settled":          false,
+  "settled_tx":       null
 }
 ```
+
+When the loan settles (Tx-Repay broadcast, Tx-B broadcast, or rescue),
+each party flips `settled: true` and writes `settled_tx: <txid>` so
+indexers can derive outcome.
 
 ### `contract.loan.history` — outcome attestation
 

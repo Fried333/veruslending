@@ -53,7 +53,7 @@ nav button.active { background: rgba(88,166,255,0.1); color: var(--accent); }
 #status .ok { color: var(--good); }
 #status .err { color: var(--bad); }
 
-main { padding: 20px; max-width: 960px; margin: 0 auto; }
+main { padding: 20px; max-width: 1320px; margin: 0 auto; }
 
 .section { display: none; }
 .section.active { display: block; }
@@ -91,6 +91,89 @@ h2 { font-size: 18px; margin: 0 0 16px 0; font-weight: 600; }
 .badge.option{ background: rgba(88,166,255,0.15); color: var(--accent); }
 .badge.escrow{ background: rgba(248,81,73,0.15);  color: var(--bad); }
 .badge.swap  { background: rgba(255,255,255,0.08); color: var(--fg); }
+.badge.muted        { background: rgba(255,255,255,0.06); color: var(--muted); }
+.badge.loan-offer   { background: rgba(63,185,80,0.15);  color: var(--good); }
+.badge.loan-request { background: rgba(210,153,34,0.15); color: var(--warn); }
+.badge.loan-match   { background: rgba(88,166,255,0.15); color: var(--accent); }
+.badge.loan-status  { background: rgba(255,255,255,0.08); color: var(--fg); }
+.badge.borrower     { background: rgba(210,153,34,0.15); color: var(--warn); }
+.badge.lender       { background: rgba(63,185,80,0.15);  color: var(--good); }
+
+.muted { color: var(--muted); font-size: 13px; }
+
+.id-card .id-head { cursor: pointer; user-select: none; }
+.id-card .id-detail { display: none; padding-top: 8px; border-top: 1px solid var(--border); margin-top: 8px; }
+.id-card.expanded .id-detail { display: block; }
+
+.entry { padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.entry:last-child { border-bottom: 0; }
+
+.mp-tab {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+.mp-tab:hover { color: var(--fg); }
+.mp-tab.active { background: rgba(88,166,255,0.1); color: var(--accent); border-color: var(--accent); }
+
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.post-box {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.post-box h3 { margin: 0 0 12px; font-size: 14px; }
+.post-box label { font-size: 11px; }
+.post-box .preview pre {
+  background: #0e1116; border: 1px solid #30363d; border-radius: 4px;
+  padding: 8px; font-size: 11px; max-height: 200px; overflow: auto;
+  margin: 4px 0;
+}
+.post-box .result .ok  { color: var(--good); }
+.post-box .result .err { color: var(--bad);  }
+
+.collateral-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0;
+}
+.ctog {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.ctog:hover { color: var(--fg); border-color: var(--fg); }
+.ctog.selected { background: var(--accent); color: #0e1116; border-color: var(--accent); }
+
+.remove-btn { color: var(--bad); border-color: var(--bad); }
+.remove-btn:hover { background: rgba(248,81,73,0.08); }
+
+.count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: rgba(255,255,255,0.06);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: normal;
+}
+.mp-tab.active .count { background: rgba(88,166,255,0.2); color: var(--accent); }
+
+.badge.yours  { background: rgba(88,166,255,0.18); color: var(--accent); }
+.badge.to-you { background: rgba(210,153,34,0.18); color: var(--warn); }
 
 .empty {
   text-align: center;

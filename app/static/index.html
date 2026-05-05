@@ -9,46 +9,75 @@
   <header>
     <h1>VerusLending</h1>
     <nav>
-      <button data-section="positions" class="active">Positions</button>
-      <button data-section="marketplace">Marketplace</button>
-      <button data-section="settings">Settings</button>
+      <button data-section="market" class="active">Marketplace</button>
+      <button data-section="loans">Active loans</button>
+      <button data-section="activity">Activity</button>
     </nav>
     <div id="status">connecting…</div>
   </header>
 
   <main>
-    <section id="positions" class="section active">
-      <h2>Outstanding positions</h2>
-      <div id="positions-list"></div>
+
+    <section id="market" class="section active">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="margin:0;flex:1">Marketplace</h2>
+        <button class="ghost" id="market-refresh" style="flex:0 0 auto">Refresh</button>
+      </div>
+
+      <div class="row" style="gap:8px;margin-bottom:14px;align-items:center">
+        <button class="primary" id="mp-post-request" style="flex:0 0 auto">Post loan request</button>
+        <div style="flex:1;display:flex;justify-content:center;gap:8px">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted);margin:0">
+            R-address
+            <select id="mp-r-picker" style="width:auto;min-width:180px"></select>
+          </label>
+          <label id="mp-id-picker-label" style="display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted);margin:0">
+            ID
+            <select id="mp-id-picker" style="width:auto;min-width:200px"></select>
+          </label>
+        </div>
+        <button class="primary" id="mp-post-offer" style="flex:0 0 auto">Post loan offer</button>
+      </div>
+
+      <div id="mp-post-form" style="display:none;margin-bottom:16px"></div>
+
+      <div class="row" style="gap:8px;margin-bottom:12px;align-items:center">
+        <button data-mp-tab="requests" class="mp-tab active">Open requests <span class="count" id="ct-requests">·</span></button>
+        <button data-mp-tab="matches"  class="mp-tab">Open offers <span class="count" id="ct-matches">·</span></button>
+        <button data-mp-tab="offers"   class="mp-tab">Marketplace offers <span class="count" id="ct-offers">·</span></button>
+        <button data-mp-tab="comms"    class="mp-tab" disabled style="opacity:0.4;cursor:not-allowed" title="Disabled while marketplace tab loading is being stabilised">Communications <span class="count" id="ct-comms">soon</span></button>
+        <span style="flex:1"></span>
+        <label style="display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted);margin:0;cursor:pointer" title="Hides entries past their valid_until_block / expires_block, and entries posted &gt; 7 days ago without an explicit expiry">
+          <input type="checkbox" id="mp-show-stale" style="margin:0">
+          Show stale
+        </label>
+      </div>
+
+      <div id="market-list">Loading…</div>
     </section>
 
-    <section id="marketplace" class="section">
-      <h2>Marketplace</h2>
-      <div class="card">
-        <label>Browse offers under parent ID</label>
-        <div class="row">
-          <input id="mp-parent" placeholder="lend@" />
-          <button class="primary" id="mp-load" style="flex:0 0 auto">Load</button>
-        </div>
-        <div id="mp-results" style="margin-top:16px"></div>
+    <section id="loans" class="section">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="margin:0;flex:1">Active loans</h2>
+        <button class="ghost" id="loans-refresh" style="flex:0 0 auto">Refresh</button>
       </div>
+      <div class="muted" style="margin-bottom:12px">
+        Loans where any local identity is a party.
+      </div>
+      <div id="loans-list">Loading…</div>
     </section>
 
-    <section id="settings" class="section">
-      <h2>Settings</h2>
-      <div class="card">
-        <label>My VerusID (used for posting offers / writing history)</label>
-        <input id="set-myid" placeholder="alice.you@" />
-        <label>My R-address (for signing / change)</label>
-        <input id="set-myaddr" placeholder="R…" />
-        <label>My compressed pubkey (used in vault derivation)</label>
-        <input id="set-mypub" placeholder="03…" />
-        <div class="row" style="margin-top:12px">
-          <button class="primary" id="set-save" style="flex:0 0 auto">Save</button>
-          <span id="set-msg" style="color:var(--muted);font-size:12px"></span>
-        </div>
+    <section id="activity" class="section">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="margin:0;flex:1">Activity</h2>
+        <button class="ghost" id="activity-refresh" style="flex:0 0 auto">Refresh</button>
       </div>
+      <div class="muted" style="margin-bottom:12px">
+        Every contract-related event across local identities, newest first.
+      </div>
+      <div id="activity-list">Loading…</div>
     </section>
+
   </main>
 
   <script type="module" src="/js/main.js"></script>
