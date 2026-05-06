@@ -407,7 +407,10 @@ function escapeHtml(s) {
 
 function formatAmount(a) {
   if (!a || typeof a !== "object") return "—";
-  return `${a.amount ?? "?"} ${a.currency ?? ""}`;
+  // Chain-controlled (anyone with a VerusID can post arbitrary multimap
+  // entries), so always escape before returning — safe to inline into
+  // innerHTML at call sites.
+  return `${escapeHtml(a.amount ?? "?")} ${escapeHtml(a.currency ?? "")}`;
 }
 
 // ---------- header status ----------
@@ -574,7 +577,7 @@ document.getElementById("ids-list")?.addEventListener("click", async (ev) => {
       btn.disabled = true;
       btn.textContent = "Removing…";
       try {
-        const info = await rpc("getidentity", [card.dataset.iaddr]);
+        const info = await rpc("getidentity", [card.dataset.iaddr, -1]);
         const cm = info?.identity?.contentmultimap || {};
         const newCm = {};
         for (const [k, v] of Object.entries(cm)) {
@@ -717,7 +720,7 @@ document.getElementById("ids-list")?.addEventListener("click", async (ev) => {
   const parent = card.dataset.parent;
   let existing = {};
   try {
-    const info = await rpc("getidentity", [iaddr]);
+    const info = await rpc("getidentity", [iaddr, -1]);
     existing = info?.identity?.contentmultimap || {};
   } catch (e) { /* ignore */ }
   const json = JSON.stringify(payload);
@@ -776,7 +779,9 @@ async function broadcastEntry(card, form) {
     const txid = await rpc("updateidentity", [updateArg]);
     resEl.innerHTML = `<span class="ok">✓ Broadcast: <code>${escapeHtml(txid)}</code></span>`;
     pendingBroadcasts.delete(card.dataset.iaddr);
-    setTimeout(() => loadIdentities(), 3000);
+    // Invalidate so the next loadMarket re-fetches and surfaces the new post.
+    invalidateMarketCache();
+    setTimeout(() => { loadIdentities(); loadMarket(); }, 3000);
   } catch (e) {
     resEl.innerHTML = `<span class="err">✗ ${escapeHtml(e.message)}</span>`;
   }
@@ -793,13 +798,36 @@ async function broadcastEntry(card, form) {
 // but doesn't filter visibility. Each tab shows a count.
 
 const LS_KEY_ACTING = "vl_acting_iaddr";
-let mpTab = "requests";
+let mpTab = "loans";
+
+// Map new lifecycle-organised tabs to the underlying VDXF list each
+// renders from. The bigger /loans/by-party-driven joined view is
+// future work; for now this restructure regroups existing per-VDXF
+// data into the user-task tabs.
+function mpTabToLegacy(tab) {
+  switch (tab) {
+    case "inbox":    return "matches";   // matches addressed to me
+    case "myposts":  return "requests";  // my requests + addressed-to-me requests
+    case "active":   return "active";    // active loans (special-cased below)
+    case "history":  return "history";   // settled/defaulted (special-cased)
+    case "market":   return "offers";    // others' offers
+    default:         return "requests";
+  }
+}
 
 document.querySelectorAll('#market [data-mp-tab]').forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll('#market [data-mp-tab]').forEach((x) => x.classList.remove("active"));
     b.classList.add("active");
     mpTab = b.dataset.mpTab;
+    // Clear any in-flight op markers from the previous tab — those guard
+    // against re-render clobbering an active panel, but tab switches are
+    // explicit user navigation, so the guard shouldn't apply.
+    document.querySelectorAll('#market-list [data-op-active="1"]').forEach((p) => {
+      delete p.dataset.opActive;
+      p.style.display = "none";
+      p.innerHTML = "";
+    });
     loadMarket();
   };
 });
@@ -883,14 +911,10 @@ async function populateActingPicker() {
     localStorage.setItem(LS_KEY_R, rSel.value);
     refreshIdPicker();
     loadMarket();
-    loadLoans();
-    loadActivity();
   };
   iSel.onchange = () => {
     localStorage.setItem(LS_KEY_IADDR, iSel.value);
     loadMarket();
-    loadLoans();
-    loadActivity();
   };
 }
 
@@ -927,6 +951,38 @@ let _marketLoadToken = 0;
 // we fall back to last-known-good data rather than wiping the list.
 const _marketEndpointCache = new Map(); // path -> { at, data, inflight }
 const MARKET_CACHE_TTL_MS = 15000;
+
+// Shared cache for /loans/by-party. Multiple GUI surfaces call this
+// (loadLoans, Inbox filter, My posts filter, auto-accept watcher) — without
+// a shared cache they each fire an explorer call per acting iaddr per
+// load, which 429s scan.verus.cx fast. Cache keyed by `address:state`.
+const _byPartyCache = new Map();
+async function fetchLoansByParty(address, state) {
+  const key = `${address}:${state || 'all'}`;
+  const slot = _byPartyCache.get(key);
+  const now = Date.now();
+  if (slot && slot.data && (now - slot.at) < MARKET_CACHE_TTL_MS) return slot.data;
+  if (slot && slot.inflight) return slot.inflight;
+  const inflight = (async () => {
+    try {
+      const stateQ = state ? `&state=${encodeURIComponent(state)}` : '';
+      const r = await fetch(`${EXPLORER_API}/contracts/loans/by-party?address=${encodeURIComponent(address)}${stateQ}&pageSize=200&include_mempool=true`);
+      if (r.status === 429) {
+        // Surface stale data if any; otherwise empty fallback
+        return slot?.data || { results: [] };
+      }
+      const json = await r.json();
+      _byPartyCache.set(key, { at: Date.now(), data: json, inflight: null });
+      return json;
+    } catch {
+      return slot?.data || { results: [] };
+    }
+  })();
+  if (!slot) _byPartyCache.set(key, { at: 0, data: null, inflight });
+  else slot.inflight = inflight;
+  try { return await inflight; }
+  finally { const s = _byPartyCache.get(key); if (s) s.inflight = null; }
+}
 async function fetchOneMarketTab(path) {
   const now = Date.now();
   let slot = _marketEndpointCache.get(path);
@@ -999,6 +1055,7 @@ async function loadMarket() {
   const activeFailed =
     (mpTab === "requests" && reqRes.__failed) ||
     (mpTab === "offers" && offRes.__failed) ||
+    (mpTab === "myoffers" && offRes.__failed) ||
     (mpTab === "matches" && mchRes.__failed);
   if (activeFailed && el.querySelector(".mp-row")) {
     return;
@@ -1015,12 +1072,25 @@ async function loadMarket() {
   const reqAll = reqRes.results || [];
   const offAll = offRes.results || [];
   const mchAll = mchRes.results || [];
-  const reqCount = scopeSet ? reqAll.filter((r) => scopeSet.has(r.iaddr)).length                                          : reqAll.length;
-  const offCount = scopeSet ? offAll.filter((r) => scopeSet.has(r.iaddr)).length                                          : offAll.length;
+  const reqCount = scopeSet ? reqAll.filter((r) => scopeSet.has(r.iaddr) || (r.target_lender_iaddr && scopeSet.has(r.target_lender_iaddr))).length : reqAll.length;
+  // My offers: offers posted by an in-scope identity.
+  const myOffCount = scopeSet ? offAll.filter((r) => scopeSet.has(r.iaddr)).length : 0;
+  // Market offers: external offers (others'). When acting="all" and R="all"
+  // there's no "yours" to subtract, so it's the network total.
+  const offCount = scopeSet ? offAll.filter((r) => !scopeSet.has(r.iaddr)).length : offAll.length;
   const mchCount = scopeSet ? mchAll.filter((r) => scopeSet.has(r.match_iaddr) || scopeSet.has(r.request?.iaddr)).length : mchAll.length;
-  document.getElementById("ct-requests").textContent = reqCount;
-  document.getElementById("ct-matches").textContent  = mchCount;
-  document.getElementById("ct-offers").textContent   = offCount;
+  // Count badges for the new lifecycle tabs (Inbox / My posts / Marketplace).
+  // Active and History counts are derived async from local identity state
+  // and updated by their respective load functions.
+  const setCt = (id, n) => { const el = document.getElementById(id); if (el) el.textContent = String(n); };
+  setCt("ct-inbox",   mchCount);                       // matches addressed to me
+  setCt("ct-myposts", reqCount + myOffCount);          // my requests + my offers
+  setCt("ct-market",  offCount);                       // others' offers
+  // Legacy badges (in case any older HTML is still cached)
+  setCt("ct-requests", reqCount);
+  setCt("ct-matches",  mchCount);
+  setCt("ct-myoffers", myOffCount);
+  setCt("ct-offers",   offCount);
 
   // For "yours" / "local" decorations:
   //   - acting=specific: only need to compare against acting iaddr (no RPC needed)
@@ -1039,25 +1109,264 @@ async function loadMarket() {
   }
 
   let rows, render;
-  if (mpTab === "requests") { rows = reqRes.results || []; render = (r) => renderMarketRequest(r, mySet, myMap, acting); }
-  else if (mpTab === "offers") { rows = offRes.results || []; render = (r) => renderMarketOffer(r, mySet, myMap, acting); }
-  else if (mpTab === "matches") { rows = mchRes.results || []; render = (r) => renderMarketMatch(r, mySet, myMap, acting); }
-  else if (mpTab === "comms") { return renderCommsTab(el, acting, myToken); }
+  // Unified "Loans" tab: combines what used to be three separate tabs
+  // (Inbox / My posts / Active) into one section-based view. Sections
+  // group by who's blocking progress:
+  //   1. Active loans (Tx-A broadcast, in flight)
+  //   2. Awaiting your action (matches sent to you as borrower; requests
+  //      directed at you as lender)
+  //   3. Awaiting counterparty (your open requests/offers/matches)
+  // History stays separate (terminal-state browsing); Marketplace stays
+  // separate (browsing other people's posts).
+  if (mpTab === "loans") {
+    const myIaddrs = await inScopeIaddrs();
+    const partyAddrs = (acting && acting !== "all") ? [acting] : myIaddrs;
+
+    // Pre-fetch joined loan-thread state so we know which open posts are
+    // already past pending (and thus don't belong here).
+    const acceptedTxAtxids = new Set();
+    const acceptedRequestTxids = new Set();
+    const matchedRequestTxids = new Set();
+    try {
+      for (const ia of partyAddrs) {
+        const j = await fetchLoansByParty(ia);
+        for (const l of (j?.results || [])) {
+          if (l.state === 'active' || l.state === 'repaid' || l.state === 'defaulted') {
+            if (l.loan_id)      acceptedTxAtxids.add(l.loan_id);
+            if (l.request_txid) acceptedRequestTxids.add(l.request_txid);
+          }
+          if (l.state !== 'pending' && l.request_txid && l.lender_iaddr && partyAddrs.includes(l.lender_iaddr)) {
+            matchedRequestTxids.add(l.request_txid);
+          }
+        }
+      }
+    } catch {}
+
+    // Pending requests directed at me as lender — these need my action.
+    const reqsAtMe = (reqRes.results || []).filter((r) =>
+      r.target_lender_iaddr && mySet.has(r.target_lender_iaddr) &&
+      !mySet.has(r.iaddr) &&
+      !matchedRequestTxids.has(r.posted_tx)
+    );
+    // My own requests waiting for a lender match.
+    const myReqs = (reqRes.results || []).filter((r) =>
+      mySet.has(r.iaddr) && !matchedRequestTxids.has(r.posted_tx)
+    );
+    // My offers (lender side, awaiting borrowers).
+    const myOffs = (offRes.results || []).filter((r) => mySet.has(r.iaddr));
+    // Matches addressed to me as borrower (lender posted a match for my request).
+    const matchesAtMe = (mchRes.results || []).filter((r) =>
+      r.request?.iaddr && mySet.has(r.request.iaddr) && !mySet.has(r.match_iaddr) &&
+      !acceptedRequestTxids.has(r.request?.txid) && !acceptedTxAtxids.has(r.tx_a_txid)
+    );
+    // My posted matches (I'm lender, waiting for borrower to accept).
+    const myMchs = (mchRes.results || []).filter((r) =>
+      mySet.has(r.match_iaddr) && !acceptedTxAtxids.has(r.tx_a_txid)
+    );
+
+    // Active loans — daemon-first walk per acting/local iaddr.
+    let activeRows = [];
+    try {
+      activeRows = (await Promise.all(partyAddrs.map(fetchActiveLoansFromDaemon))).flat();
+    } catch {}
+    const seenLoanIds = new Set();
+    activeRows = activeRows.filter((l) => {
+      const id = l.loan_id || l.tx_a_txid;
+      if (seenLoanIds.has(id)) return false;
+      seenLoanIds.add(id);
+      return true;
+    });
+
+    // Counts for the Loans tab badge — actionable items only.
+    const actionCount = matchesAtMe.length + reqsAtMe.length;
+    const waitingCount = myReqs.length + myOffs.length + myMchs.length;
+    const ctLoans = document.getElementById("ct-loans");
+    if (ctLoans) ctLoans.textContent = String(actionCount + waitingCount + activeRows.length);
+
+    if (myToken !== _marketLoadToken) return;
+    const hasActiveOp = !!el.querySelector('.post-match-panel[data-op-active="1"], .accept-panel[data-op-active="1"]');
+    if (hasActiveOp) return;
+
+    const sectionHeader = (label) =>
+      `<div style="margin:14px 0 6px 0;font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted)">${label}</div>`;
+    const parts = [];
+    if (activeRows.length) {
+      parts.push(sectionHeader("Active loans"));
+      parts.push(activeRows.map(renderActiveLoan).join(""));
+    }
+    if (actionCount > 0) {
+      parts.push(sectionHeader("Awaiting your action"));
+      parts.push(matchesAtMe.map((r) => renderMarketMatch(r, mySet, myMap, acting)).join(""));
+      parts.push(reqsAtMe.map((r) => renderMarketRequest(r, mySet, myMap, acting)).join(""));
+    }
+    if (waitingCount > 0) {
+      parts.push(sectionHeader("Awaiting counterparty"));
+      parts.push(myReqs.map((r) => renderMarketRequest(r, mySet, myMap, acting)).join(""));
+      parts.push(myOffs.map((r) => renderMarketOffer(r, mySet, myMap, acting)).join(""));
+      parts.push(myMchs.map((r) => renderMarketMatch(r, mySet, myMap, acting)).join(""));
+    }
+    if (parts.length === 0) {
+      el.innerHTML = `<div class="empty">No loans yet — <a href="#" id="goto-market-empty">browse the marketplace</a> to find a counterparty, or post a loan request/offer above.</div>`;
+      const link = document.getElementById("goto-market-empty");
+      if (link) link.onclick = (e) => { e.preventDefault(); document.querySelector('[data-mp-tab="market"]')?.click(); };
+    } else {
+      el.innerHTML = parts.join("");
+      enrichActiveLoanBalances();
+    }
+
+    // Auto-load action panels: same pattern as the lender's Fund flow.
+    // For "Awaiting your action" rows, eagerly trigger the prep so the
+    // confirm panel shows inline without an extra click.
+    if (acting && acting !== "all") {
+      queueMicrotask(() => {
+        // Auto-fund: pending requests directed at acting as lender.
+        el.querySelectorAll('.mp-row[data-request-key]').forEach((rowEl) => {
+          const r = requestByKey.get(rowEl.dataset.requestKey);
+          if (!r) return;
+          if (r.target_lender_iaddr !== acting) return;
+          if (r.iaddr === acting) return;
+          const btn = rowEl.querySelector('[data-mp-row-act="post-match"]');
+          if (!btn) return;
+          btn.style.display = 'none';
+          btn.click();
+        });
+        // Auto-accept (manual review): matches addressed to acting as
+        // borrower. Auto-loads the confirm panel; user clicks "Confirm
+        // — accept & broadcast Tx-A" to commit. This is separate from
+        // the silent auto-accept watcher (which runs only when
+        // auto_accept=true was set on the request).
+        el.querySelectorAll('.mp-row[data-match-key]').forEach((rowEl) => {
+          const k = rowEl.dataset.matchKey;
+          const r = matchByKey.get(k);
+          if (!r) return;
+          if (!r.request?.iaddr || r.request.iaddr !== acting) return;
+          if (r.match_iaddr === acting) return;     // not your own match
+          const btn = rowEl.querySelector('[data-mp-row-act="accept"]');
+          if (!btn) return;
+          btn.style.display = 'none';
+          btn.click();
+        });
+      });
+    }
+    return;
+  }
+
+  // Legacy lifecycle tabs — kept for any deep links / older HTML caches.
+  if (mpTab === "inbox" || mpTab === "matches") {
+    // Inbox: match proposals addressed to me as borrower. Filter out
+    // matches that have already been accepted — those have a
+    // corresponding loan.status entry on my own identity with matching
+    // loan_id (= match.tx_a_txid). Already-accepted matches show in
+    // Active until settled, then in History.
+    let inboxRows = mchRes.results || [];
+    try {
+      // Filter out matches whose loan has already opened (state >= active).
+      // Use /loans/by-party as the single source of truth — works on both
+      // borrower side (status on own iaddr) AND lender side (status on
+      // counterparty iaddr; lender doesn't post one of their own).
+      const acceptedTxAtxids = new Set();
+      const acceptedRequestTxids = new Set();
+      const myIaddrs = await inScopeIaddrs();
+      for (const ia of myIaddrs) {
+        const j = await fetchLoansByParty(ia);
+        for (const l of (j?.results || [])) {
+          if (l.state === 'active' || l.state === 'repaid' || l.state === 'defaulted') {
+            if (l.loan_id)      acceptedTxAtxids.add(l.loan_id);
+            if (l.request_txid) acceptedRequestTxids.add(l.request_txid);
+          }
+        }
+      }
+      inboxRows = inboxRows.filter((r) =>
+        !acceptedRequestTxids.has(r.request?.txid) &&
+        !acceptedTxAtxids.has(r.tx_a_txid)
+      );
+    } catch {}
+    rows = inboxRows;
+    render = (r) => renderMarketMatch(r, mySet, myMap, acting);
+  } else if (mpTab === "myposts") {
+    // My posts: combined view of my open requests + my open offers + my
+    // open matches. Each row keeps its original render fn, so type-specific
+    // actions (cancel request / cancel offer / cancel match) still work.
+    //
+    // Filter out matches that have been accepted by the borrower — those
+    // belong in Active now. Discovered via the joined /loans/by-party
+    // feed which already derives accepted state across both sides.
+    let reqs = (reqRes.results || []).map((r) => ({ __kind: 'request', ...r }));
+    const ofrs = (offRes.results || []).map((r) => ({ __kind: 'offer',   ...r }));
+    let mchs = (mchRes.results || []).map((r) => ({ __kind: 'match',   ...r }));
+    try {
+      const myIaddrs = await inScopeIaddrs();
+      const acceptedTxAtxids = new Set();
+      const matchedRequestTxids = new Set();
+      for (const ia of myIaddrs) {
+        const j = await fetchLoansByParty(ia);
+        for (const l of (j?.results || [])) {
+          if (l.state === 'active' || l.state === 'repaid' || l.state === 'defaulted') {
+            if (l.loan_id) acceptedTxAtxids.add(l.loan_id);
+          }
+          // If a local identity has progressed past 'pending' for a request
+          // (i.e. they matched it as lender), drop that request from My posts.
+          // It belongs in Active (as matched) or History now, not as a
+          // pending-fund actionable entry.
+          if (l.state !== 'pending' && l.request_txid && l.lender_iaddr && myIaddrs.includes(l.lender_iaddr)) {
+            matchedRequestTxids.add(l.request_txid);
+          }
+        }
+      }
+      mchs = mchs.filter((m) => !acceptedTxAtxids.has(m.tx_a_txid));
+      reqs = reqs.filter((r) => !matchedRequestTxids.has(r.posted_tx));
+    } catch {}
+    rows = [...reqs, ...ofrs, ...mchs];
+    render = (r) => r.__kind === 'request' ? renderMarketRequest(r, mySet, myMap, acting)
+                  : r.__kind === 'offer'   ? renderMarketOffer(r,   mySet, myMap, acting)
+                  : renderMarketMatch(r, mySet, myMap, acting);
+  } else if (mpTab === "active") {
+    // Active loans: delegate to loadLoans which renders one row per
+    // active loan from local identity multimaps + localStorage.
+    return loadLoans(el);
+  } else if (mpTab === "history") {
+    // History: settled / defaulted loans + the full activity feed for
+    // now. (Reuses loadActivity until we ship a state-filtered view.)
+    return loadActivity(el);
+  } else if (mpTab === "market" || mpTab === "offers") {
+    // Marketplace: others' offers
+    rows = offRes.results || [];
+    render = (r) => renderMarketOffer(r, mySet, myMap, acting);
+  } else if (mpTab === "myoffers") {
+    rows = offRes.results || [];
+    render = (r) => renderMarketOffer(r, mySet, myMap, acting);
+  } else if (mpTab === "requests") {
+    rows = reqRes.results || [];
+    render = (r) => renderMarketRequest(r, mySet, myMap, acting);
+  } else if (mpTab === "comms") { return renderCommsTab(el, acting, myToken); }
 
   // Strict filter: when a specific ID/R is picked, only show entries that involve them.
   //   - requests: posted by an in-scope iaddr OR directed at an in-scope iaddr
   //     (target_lender_iaddr — for lenders to see directed requests)
-  //   - offers: posted by an in-scope iaddr
+  //   - myoffers: offers POSTED by in-scope iaddrs (your own listings)
+  //   - offers (Market): offers NOT posted by in-scope iaddrs (others')
   //   - matches: posted by in-scope (yours) OR pointing at in-scope (to-you)
   if (acting !== "all" || pickedR() !== "all") {
     const inScope = await inScopeIaddrs();
     const inSet = new Set(inScope);
-    if (mpTab === "requests") {
-      rows = rows.filter((r) => inSet.has(r.iaddr) || (r.target_lender_iaddr && inSet.has(r.target_lender_iaddr)));
-    } else if (mpTab === "offers") {
-      rows = rows.filter((r) => inSet.has(r.iaddr));
-    } else if (mpTab === "matches") {
+    if (mpTab === "inbox" || mpTab === "matches") {
+      // Inbox: matches addressed to me (my request was matched) OR
+      // matches I posted that the borrower hasn't accepted yet.
       rows = rows.filter((r) => inSet.has(r.match_iaddr) || inSet.has(r.request?.iaddr));
+    } else if (mpTab === "myposts") {
+      // My posts: union of my own request/offer/match entries.
+      rows = rows.filter((r) =>
+        (r.__kind === 'request' && (inSet.has(r.iaddr) || (r.target_lender_iaddr && inSet.has(r.target_lender_iaddr)))) ||
+        (r.__kind === 'offer'   && inSet.has(r.iaddr)) ||
+        (r.__kind === 'match'   && inSet.has(r.match_iaddr))
+      );
+    } else if (mpTab === "requests") {
+      rows = rows.filter((r) => inSet.has(r.iaddr) || (r.target_lender_iaddr && inSet.has(r.target_lender_iaddr)));
+    } else if (mpTab === "myoffers") {
+      rows = rows.filter((r) => inSet.has(r.iaddr));
+    } else if (mpTab === "market" || mpTab === "offers") {
+      // Marketplace: external only. Hide your own.
+      rows = rows.filter((r) => !inSet.has(r.iaddr));
     }
   }
 
@@ -1083,6 +1392,7 @@ async function loadMarket() {
     const scopeDbg = scopeSet ? Array.from(scopeSet).join(", ") : "(no filter)";
     const totalDbg = mpTab === "requests" ? (reqRes.results?.length ?? 0)
                    : mpTab === "offers"   ? (offRes.results?.length ?? 0)
+                   : mpTab === "myoffers" ? (offRes.results?.length ?? 0)
                    : (mchRes.results?.length ?? 0);
     el.innerHTML = `
       <div class="empty">
@@ -1113,6 +1423,39 @@ async function loadMarket() {
   const hasActiveOp = !!el.querySelector('.post-match-panel[data-op-active="1"], .accept-panel[data-op-active="1"]');
   if (hasActiveOp) return;
   el.innerHTML = rows.map(render).join("");
+
+  // Auto-fund: for any request row that's targeted at the acting lender
+  // (target_lender_iaddr === acting) and NOT yet matched by anyone,
+  // eagerly trigger the post-match prep so the lender sees the confirm
+  // panel immediately instead of having to click "Fund this loan" first.
+  if (acting && acting !== "all") {
+    (async () => {
+      // Build a set of request_txids that already have a non-pending
+      // loan thread involving acting (matched/active/repaid/defaulted).
+      // Skip auto-fund for those — the lender already committed.
+      let alreadyMatched = new Set();
+      try {
+        const byParty = await fetchLoansByParty(acting);
+        for (const l of (byParty?.results || [])) {
+          if (l.state !== 'pending' && l.request_txid) {
+            alreadyMatched.add(l.request_txid);
+          }
+        }
+      } catch {}
+      el.querySelectorAll('.mp-row[data-request-key]').forEach((rowEl) => {
+        const key = rowEl.dataset.requestKey;
+        const r = requestByKey.get(key);
+        if (!r) return;
+        if (r.target_lender_iaddr !== acting) return;
+        if (r.iaddr === acting) return; // can't fund your own
+        if (r.posted_tx && alreadyMatched.has(r.posted_tx)) return; // already matched
+        const btn = rowEl.querySelector('[data-mp-row-act="post-match"]');
+        if (!btn) return;
+        btn.style.display = 'none';
+        btn.click();
+      });
+    })();
+  }
 
   // For matches: enrich each row with the linked request's terms + lender's R-balance.
   // Pass myToken so each enrichment can bail if a newer load fires mid-fetch.
@@ -1240,11 +1583,26 @@ async function enrichMatchRowTerms(rowEl, r, token) {
     ? (((req.repay.amount / req.principal.amount) - 1) * 100).toFixed(2) + "%"
     : "?";
   cell.classList.remove("muted");
-  cell.innerHTML = `
-    <div>You give: <strong>${formatAmount(req.collateral)}</strong> as collateral</div>
-    <div>You receive: <strong>${formatAmount(req.principal)}</strong></div>
-    <div>You repay: <strong>${formatAmount(req.repay)}</strong> in <strong>${req.term_days ?? "?"} days</strong> (${rate})</div>
-  `;
+  // Role-aware perspective: borrower sees "You give collateral, receive
+  // principal, repay X". Lender sees "You give principal, receive repayment
+  // (or collateral on default)". Decided per-row by whether acting iaddr is
+  // the request's poster (borrower) or the match's poster (lender).
+  const acting = actingIaddr();
+  const isLender = acting && acting !== "all" && r.match_iaddr === acting;
+  if (isLender) {
+    cell.innerHTML = `
+      <div>You give: <strong>${formatAmount(req.principal)}</strong> as principal</div>
+      <div>You receive: <strong>${formatAmount(req.repay)}</strong> on repayment (${rate} return)</div>
+      <div>If borrower defaults: claim <strong>${formatAmount(req.collateral)}</strong> from vault after maturity</div>
+      <div class="muted" style="margin-top:4px">Term: <strong>${escapeHtml(req.term_days ?? "?")}</strong> days</div>
+    `;
+  } else {
+    cell.innerHTML = `
+      <div>You give: <strong>${formatAmount(req.collateral)}</strong> as collateral</div>
+      <div>You receive: <strong>${formatAmount(req.principal)}</strong></div>
+      <div>You repay: <strong>${formatAmount(req.repay)}</strong> in <strong>${escapeHtml(req.term_days ?? "?")} days</strong> (${rate})</div>
+    `;
+  }
   // Stash the full resolved request keyed by matchKey so the Accept handler
   // can reuse it after subsequent loadMarket re-renders.
   const mKey = `match-${r.match_iaddr}-${r.posted_tx || ""}`;
@@ -1266,7 +1624,7 @@ async function enrichMatchRowBalance(rowEl, r, token) {
   let address = r.lender_address;
   if (actingIsBorrower) {
     try {
-      const info = await rpc("getidentity", [acting]);
+      const info = await rpc("getidentity", [acting, -1]);
       address = (info?.identity?.primaryaddresses || [])[0] || null;
     } catch {}
   }
@@ -1297,7 +1655,7 @@ async function enrichBorrowerCollateralBalance(rowEl, r, token) {
   if (!collCcy || !collAmt) return;
   // Borrower's primary R-address balance
   try {
-    const info = await rpc("getidentity", [acting]);
+    const info = await rpc("getidentity", [acting, -1]);
     const primaryR = (info?.identity?.primaryaddresses || [])[0];
     if (!primaryR) return;
     const bal = await rpc("getaddressbalance", [{ addresses: [primaryR] }]);
@@ -1361,13 +1719,13 @@ function renderMarketRequest(r, mySet, myMap, acting) {
         <div><span class="k">borrow</span><span class="v">${formatAmount(r.principal)}</span></div>
         <div><span class="k">collateral</span><span class="v">${formatAmount(r.collateral)}</span></div>
         <div><span class="k">repay</span><span class="v">${formatAmount(r.repay)}</span></div>
-        <div><span class="k">term</span><span class="v">${r.term_days ?? "?"} days</span></div>
-        <div><span class="k">posted</span><span class="v">block ${r.posted_block}</span></div>
+        <div><span class="k">term</span><span class="v">${escapeHtml(r.term_days ?? "?")} days</span></div>
+        <div><span class="k">posted</span><span class="v">block ${escapeHtml(r.posted_block ?? "?")}</span></div>
       </div>
       <div class="row" style="margin-top:10px">
         ${mine
           ? `<button class="ghost remove-btn" data-mp-row-act="cancel" style="flex:0 0 auto">Cancel request</button>`
-          : `<button class="primary" data-mp-row-act="post-match" style="flex:0 0 auto">Post match — fund this loan</button>`}
+          : `<button class="primary" data-mp-row-act="post-match" style="flex:0 0 auto">Fund this loan</button>`}
       </div>
       <div class="post-match-panel" style="display:none;margin-top:10px"></div>
     </div>
@@ -1392,7 +1750,7 @@ function renderMarketOffer(r, mySet, myMap, acting) {
         <div><span class="k">accepts</span><span class="v">${(r.accepted_collateral || []).join(", ") || "—"}</span></div>
         <div><span class="k">min ratio</span><span class="v">${r.min_collateral_ratio?.toFixed?.(2) ?? "?"}×</span></div>
         <div><span class="k">rate</span><span class="v">${r.rate != null ? (r.rate * 100).toFixed(1) + "%" : "?"}</span></div>
-        <div><span class="k">term</span><span class="v">${r.term_days ?? "?"} days</span></div>
+        <div><span class="k">term</span><span class="v">${escapeHtml(r.term_days ?? "?")} days</span></div>
       </div>
       ${mine ? `<div class="row" style="margin-top:10px"><button class="ghost remove-btn" data-mp-row-act="cancel" style="flex:0 0 auto">Cancel offer</button></div>` : ""}
     </div>
@@ -1411,7 +1769,7 @@ async function renderCommsTab(el, acting, myToken) {
   document.getElementById("ct-comms").textContent = "·";
   let actingInfo = null;
   if (acting && acting !== "all") {
-    try { actingInfo = await rpc("getidentity", [acting]); } catch {}
+    try { actingInfo = await rpc("getidentity", [acting, -1]); } catch {}
   }
   const zAddr = actingInfo?.identity?.privateaddress;
   const fqn = actingInfo?.identity?.fullyqualifiedname || (acting === "all" ? "All identities" : "—");
@@ -1458,7 +1816,7 @@ function renderMarketMatch(r, mySet, myMap, acting) {
           : mine ? `<span class="badge muted" style="margin-left:6px">local</span>` : ""}
       </div>
       <div class="match-terms" style="margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,0.15)">
-        <div class="muted" style="font-size:11px;margin-bottom:6px">If you accept:</div>
+        <div class="muted" style="font-size:11px;margin-bottom:6px">${isActing ? "You posted this match — terms:" : toActing ? "If you accept:" : "Match terms:"}</div>
         <div class="terms-summary muted" style="font-size:13px">fetching terms…</div>
       </div>
       <div class="kv" style="margin-top:8px;font-size:12px">
@@ -1477,11 +1835,170 @@ function renderMarketMatch(r, mySet, myMap, acting) {
             ? `<button class="primary" data-mp-row-act="accept" style="flex:0 0 auto">Accept this loan</button>`
             : `<button class="primary" disabled title="Set 'Acting as' to the borrower of this request to enable Accept">Accept</button>`
         }
-        <button class="ghost" data-mp-row-act="message-lender" style="flex:0 0 auto">Send message to lender</button>
+        ${mine
+          ? `<button class="ghost" data-mp-row-act="message-borrower" style="flex:0 0 auto">Send message to borrower</button>`
+          : toActing
+            ? `<button class="ghost" data-mp-row-act="message-lender" style="flex:0 0 auto">Send message to lender</button>`
+            : ""}
       </div>
       <div class="accept-panel" style="display:none;margin-top:10px"></div>
     </div>
   `;
+}
+
+// ── Match safety verification ──────────────────────────────────────
+// Run before the borrower broadcasts Tx-A. Returns array of human-
+// readable error strings; empty array = all checks pass.
+//
+// What's checked:
+//   1. Tx-A vout 0 (principal) pays borrower's primary R, with the
+//      currency + amount the borrower asked for in their request
+//   2. Tx-A vout 1 (vault) pays the expected 2-of-2 P2SH derived from
+//      both parties' actual pubkeys, with the collateral amount
+//   3. Tx-Repay vout 0 pays the lender's primary R (looked up from
+//      lender_iaddr's identity at receipt time), with the currency
+//      + amount from the request
+//   4. Tx-Repay vault input references Tx-A's vault output exactly
+//   5. Tx-B vout 0 same as Tx-Repay but for collateral on default
+//   6. Tx-B nLockTime >= request.maturity_block (so lender can't
+//      claim collateral before maturity)
+//   7. Tx-B vault input references Tx-A's vault output exactly
+//
+// Tx-A outputs aren't strictly verified here because the borrower's
+// own pre-signed input (SIGHASH_ALL|ANYONECANPAY) would reject the
+// broadcast if the lender altered them. We verify anyway so the
+// borrower sees exactly why a malformed match got rejected.
+async function verifyMatchSafety(matchPayload, requestPayload, borrowerIaddr) {
+  const errors = [];
+  try {
+    // Resolve the lender's primary R from chain (current state — bound
+    // to this verification snapshot; later rotations don't affect the
+    // pre-signed bytes).
+    const lenderInfo = await rpc("getidentity", [matchPayload.match_iaddr || requestPayload.target_lender_iaddr, -1]).catch(() => null);
+    const lenderR = lenderInfo?.identity?.primaryaddresses?.[0];
+    if (!lenderR) {
+      errors.push("can't resolve lender's primary R-address from their identity");
+      return errors;
+    }
+    const borrowerInfo = await rpc("getidentity", [borrowerIaddr, -1]).catch(() => null);
+    const borrowerR = borrowerInfo?.identity?.primaryaddresses?.[0];
+    if (!borrowerR) {
+      errors.push("can't resolve your own primary R-address");
+      return errors;
+    }
+
+    // Decode all 3 partials
+    const [decA, decRepay, decB] = await Promise.all([
+      rpc("decoderawtransaction", [matchPayload.tx_a_full]).catch(() => null),
+      rpc("decoderawtransaction", [matchPayload.tx_repay_partial]).catch(() => null),
+      rpc("decoderawtransaction", [matchPayload.tx_b_partial]).catch(() => null),
+    ]);
+    if (!decA)     { errors.push("can't decode Tx-A"); return errors; }
+    if (!decRepay) { errors.push("can't decode Tx-Repay partial"); return errors; }
+    if (!decB)     { errors.push("can't decode Tx-B partial"); return errors; }
+
+    const txAtxid = decA.txid;
+    const vaultVout = (typeof matchPayload.vault_vout === "number")
+      ? matchPayload.vault_vout
+      : decA.vout.findIndex((o) => (o.scriptPubKey?.addresses || []).includes(matchPayload.vault_address));
+    if (vaultVout < 0) errors.push("vault output not found in Tx-A");
+
+    // Check 1: Tx-A vout 0 — principal to borrower
+    const principalOut = decA.vout[0];
+    const principalAddrs = principalOut?.scriptPubKey?.addresses || [];
+    if (!principalAddrs.includes(borrowerR)) {
+      errors.push(`Tx-A principal output pays ${principalAddrs[0] || "?"} — expected your R ${borrowerR}`);
+    }
+    const principalCcy = requestPayload.principal?.currency;
+    const principalAmt = parseFloat(requestPayload.principal?.amount ?? 0);
+    if (principalCcy === "VRSC") {
+      if (Math.round((principalOut?.value ?? 0) * 1e8) !== Math.round(principalAmt * 1e8)) {
+        errors.push(`Tx-A principal amount ${principalOut?.value} VRSC — expected ${principalAmt}`);
+      }
+    } else {
+      const cv = principalOut?.scriptPubKey?.reserveoutput?.currencyvalues || {};
+      const got = parseFloat(Object.values(cv)[0] ?? 0);
+      if (Math.round(got * 1e8) !== Math.round(principalAmt * 1e8)) {
+        errors.push(`Tx-A principal amount ${got} — expected ${principalAmt} ${principalCcy}`);
+      }
+    }
+
+    // Check 2: vault P2SH derived from real pubkeys
+    if (vaultVout >= 0) {
+      const vaultAddrs = decA.vout[vaultVout]?.scriptPubKey?.addresses || [];
+      if (!vaultAddrs.includes(matchPayload.vault_address)) {
+        errors.push(`Tx-A vault output address mismatch: ${vaultAddrs[0]} vs claimed ${matchPayload.vault_address}`);
+      }
+      // Collateral amount in vault
+      const collateralCcy = requestPayload.collateral?.currency;
+      const collateralAmt = parseFloat(requestPayload.collateral?.amount ?? 0);
+      const vaultOut = decA.vout[vaultVout];
+      if (collateralCcy === "VRSC") {
+        if (Math.round((vaultOut?.value ?? 0) * 1e8) !== Math.round(collateralAmt * 1e8)) {
+          errors.push(`Tx-A vault holds ${vaultOut?.value} VRSC — expected ${collateralAmt}`);
+        }
+      } else {
+        const cv = vaultOut?.scriptPubKey?.reserveoutput?.currencyvalues || {};
+        const got = parseFloat(Object.values(cv)[0] ?? 0);
+        if (Math.round(got * 1e8) !== Math.round(collateralAmt * 1e8)) {
+          errors.push(`Tx-A vault holds ${got} — expected ${collateralAmt} ${collateralCcy}`);
+        }
+      }
+    }
+
+    // Check 3+4: Tx-Repay output 0 + vault input
+    const repayOut = decRepay.vout[0];
+    const repayAddrs = repayOut?.scriptPubKey?.addresses || [];
+    if (!repayAddrs.includes(lenderR)) {
+      errors.push(`Tx-Repay output 0 pays ${repayAddrs[0] || "?"} — expected lender's R ${lenderR}`);
+    }
+    const repayCcy = requestPayload.repay?.currency;
+    const repayAmt = parseFloat(requestPayload.repay?.amount ?? 0);
+    if (repayCcy === "VRSC") {
+      if (Math.round((repayOut?.value ?? 0) * 1e8) !== Math.round(repayAmt * 1e8)) {
+        errors.push(`Tx-Repay output 0 amount ${repayOut?.value} VRSC — expected ${repayAmt}`);
+      }
+    } else {
+      const cv = repayOut?.scriptPubKey?.reserveoutput?.currencyvalues || {};
+      const got = parseFloat(Object.values(cv)[0] ?? 0);
+      if (Math.round(got * 1e8) !== Math.round(repayAmt * 1e8)) {
+        errors.push(`Tx-Repay output 0 amount ${got} — expected ${repayAmt} ${repayCcy}`);
+      }
+    }
+    if (decRepay.vin[0]?.txid !== txAtxid || decRepay.vin[0]?.vout !== vaultVout) {
+      errors.push(`Tx-Repay vault input references ${decRepay.vin[0]?.txid?.slice(0,16)}:${decRepay.vin[0]?.vout} — expected ${txAtxid.slice(0,16)}:${vaultVout}`);
+    }
+
+    // Check 5+6+7: Tx-B output 0 + nLockTime + vault input
+    const bOut = decB.vout[0];
+    const bAddrs = bOut?.scriptPubKey?.addresses || [];
+    if (!bAddrs.includes(lenderR)) {
+      errors.push(`Tx-B output 0 pays ${bAddrs[0] || "?"} — expected lender's R ${lenderR}`);
+    }
+    const collateralCcy = requestPayload.collateral?.currency;
+    const collateralAmt = parseFloat(requestPayload.collateral?.amount ?? 0);
+    if (collateralCcy === "VRSC") {
+      if (Math.round((bOut?.value ?? 0) * 1e8) !== Math.round(collateralAmt * 1e8)) {
+        errors.push(`Tx-B output 0 amount ${bOut?.value} VRSC — expected ${collateralAmt}`);
+      }
+    } else {
+      const cv = bOut?.scriptPubKey?.reserveoutput?.currencyvalues || {};
+      const got = parseFloat(Object.values(cv)[0] ?? 0);
+      if (Math.round(got * 1e8) !== Math.round(collateralAmt * 1e8)) {
+        errors.push(`Tx-B output 0 amount ${got} — expected ${collateralAmt} ${collateralCcy}`);
+      }
+    }
+    const maturity = matchPayload.maturity_block ?? 0;
+    if ((decB.locktime ?? 0) < maturity) {
+      errors.push(`Tx-B nLockTime ${decB.locktime} < maturity block ${maturity} — lender could claim collateral early`);
+    }
+    if (decB.vin[0]?.txid !== txAtxid || decB.vin[0]?.vout !== vaultVout) {
+      errors.push(`Tx-B vault input references ${decB.vin[0]?.txid?.slice(0,16)}:${decB.vin[0]?.vout} — expected ${txAtxid.slice(0,16)}:${vaultVout}`);
+    }
+  } catch (e) {
+    errors.push(`verification error: ${e.message}`);
+  }
+  return errors;
 }
 
 // Cancel handler — removes the relevant VDXF entry from the i-address's multimap
@@ -1530,8 +2047,8 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     // Look up both: lender's z-address (recipient) + acting ID's z-address (sender)
     const acting = actingIaddr();
     const [recipInfo, senderInfo] = await Promise.all([
-      rpc("getidentity", [r.match_iaddr]).catch(() => null),
-      acting && acting !== "all" ? rpc("getidentity", [acting]).catch(() => null) : null,
+      rpc("getidentity", [r.match_iaddr, -1]).catch(() => null),
+      acting && acting !== "all" ? rpc("getidentity", [acting, -1]).catch(() => null) : null,
     ]);
     const toZ = recipInfo?.identity?.privateaddress || null;
     const fromZ = senderInfo?.identity?.privateaddress || null;
@@ -1577,7 +2094,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // Also pulls the FULL loan.request payload from the multimap (the
       // explorer's typed endpoint strips v2-only fields like the borrower's
       // signed Tx-A skeleton, so we have to read it directly).
-      const borrowerInfo = await rpc("getidentity", [r.iaddr]);
+      const borrowerInfo = await rpc("getidentity", [r.iaddr, -1]);
       try {
         const VDXF_LOAN_REQUEST = "iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28";
         const cm = borrowerInfo?.identity?.contentmultimap || {};
@@ -1616,7 +2133,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       const borrowerR = (borrowerInfo?.identity?.primaryaddresses || [])[0];
       if (!borrowerR) throw new Error("borrower identity has no primary R-address");
       // Lender's primary R + pubkey.
-      const lenderInfo = await rpc("getidentity", [acting]);
+      const lenderInfo = await rpc("getidentity", [acting, -1]);
       const lenderR = (lenderInfo?.identity?.primaryaddresses || [])[0];
       if (!lenderR) throw new Error("acting identity has no primary R-address");
       const [lenderPubkey, borrowerPubkey] = await Promise.all([
@@ -1630,37 +2147,31 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       const principalAmt = parseFloat(r.principal?.amount ?? 0);
       const principalSats = Math.round(principalAmt * 1e8);
       if (!principalCcy || !principalAmt) throw new Error("request principal missing");
+      // Aligned with the borrower's request flow: always auto-split a fresh
+      // single-currency UTXO via sendcurrency, regardless of what the wallet
+      // currently holds. Predictable Tx-A skeleton building, no UTXO picker.
       const utxos = await rpc("getaddressutxos", [{ addresses: [lenderR], currencynames: true }]);
       const candidates = utxos.filter((u) => {
         const cv = u.currencyvalues || {};
         if (principalCcy === "VRSC" || principalCcy === "i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV") {
           return u.satoshis >= principalSats;
         }
-        const have = parseFloat(Object.values(cv)[0] ?? 0);
-        // currencyvalues uses the currency i-address as the key — match by name resolved later
         return Object.entries(cv).some(([k, v]) => k && parseFloat(v) >= principalAmt);
       });
-      const exact = candidates.find((u) => {
-        if (principalCcy === "VRSC") return u.satoshis === principalSats;
-        return Object.values(u.currencyvalues || {}).some((v) => parseFloat(v) === principalAmt);
-      });
-      // Render form with the discovered options.
       panel.innerHTML = `
         <div class="review">
           <strong>Post a pre-signed match for ${escapeHtml(r.fullyQualifiedName || r.name + "@")}</strong>
           <div class="kv" style="margin-top:8px;font-size:12px">
-            <div><span class="k">you commit</span><span class="v">${escapeHtml(formatAmount(r.principal))} (principal)</span></div>
-            <div><span class="k">borrower commits</span><span class="v">${escapeHtml(formatAmount(r.collateral))} (collateral)</span></div>
-            <div><span class="k">repayment</span><span class="v">${escapeHtml(formatAmount(r.repay))} in ${r.term_days ?? "?"} days</span></div>
+            <div><span class="k">you commit</span><span class="v">${formatAmount(r.principal)} (principal)</span></div>
+            <div><span class="k">borrower commits</span><span class="v">${formatAmount(r.collateral)} (collateral)</span></div>
+            <div><span class="k">repayment</span><span class="v">${formatAmount(r.repay)} in ${escapeHtml(r.term_days ?? "?")} days</span></div>
             <div><span class="k">acting as</span><span class="v">${escapeHtml(lenderInfo?.identity?.fullyqualifiedname || acting)}</span></div>
             <div><span class="k">vault P2SH</span><span class="v"><span class="muted vault-preview">computing…</span></span></div>
           </div>
-          ${exact
-            ? `<div style="margin-top:10px"><span class="muted" style="font-size:12px">Funding UTXO: <code>${escapeHtml(exact.txid.slice(0, 16))}…:${exact.outputIndex}</code> (exact match) ✓</span></div>`
-            : candidates.length
-              ? `<div style="margin-top:10px;color:var(--warn);font-size:12px">No exact-amount UTXO. Will split a larger UTXO first via sendcurrency, then post the match.</div>`
-              : `<div style="margin-top:10px;color:var(--bad);font-size:12px">No ${escapeHtml(principalCcy)} UTXO at ${escapeHtml(lenderR)} large enough to fund ${escapeHtml(formatAmount(r.principal))}.</div>`}
-          ${candidates.length ? `<button class="primary" data-mp-row-act="post-match-go" style="margin-top:10px">${exact ? "Build, sign, post match" : "Split UTXO, then build & post"}</button>` : ""}
+          ${candidates.length
+            ? `<div style="margin-top:10px;font-size:12px;color:var(--muted)">Will split a fresh ${escapeHtml(principalCcy)} UTXO via sendcurrency, then post the match.</div>`
+            : `<div style="margin-top:10px;color:var(--bad);font-size:12px">No ${escapeHtml(principalCcy)} balance at ${escapeHtml(lenderR)} large enough to fund ${formatAmount(r.principal)}.</div>`}
+          ${candidates.length ? `<div class="row" style="margin-top:10px;gap:8px"><button class="primary" data-mp-row-act="post-match-go" style="flex:0 0 auto">Confirm — build, sign &amp; broadcast</button><button class="ghost" data-mp-row-act="post-match-cancel" style="flex:0 0 auto">Cancel</button></div>` : ""}
           <div class="post-match-result" style="margin-top:8px"></div>
         </div>
       `;
@@ -1700,6 +2211,26 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     return;
   }
 
+  if (action === "accept-cancel") {
+    const panel = row.querySelector(".accept-panel");
+    if (panel) {
+      panel.style.display = "none";
+      panel.innerHTML = "";
+      delete panel.dataset.opActive;
+    }
+    return;
+  }
+
+  if (action === "post-match-cancel") {
+    const panel = row.querySelector(".post-match-panel");
+    if (panel) {
+      panel.style.display = "none";
+      panel.innerHTML = "";
+      delete panel.dataset.opActive;
+    }
+    return;
+  }
+
   if (action === "post-match-go") {
     const panel = row.querySelector(".post-match-panel");
     const resultEl = panel.querySelector(".post-match-result") || panel;
@@ -1735,28 +2266,11 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       const vaultVout = decoded.vout.findIndex((o) => (o.scriptPubKey?.addresses || []).includes(ds.vaultAddress));
       if (vaultVout < 0) throw new Error(`vault P2SH ${ds.vaultAddress} not found in borrower's skeleton outputs`);
 
-      btn.textContent = "Finding exact-amount UTXO for principal…";
-      // Find or create an exact UTXO for the principal currency. Prefer
-      // SINGLE-CURRENCY UTXOs: a multi-currency UTXO would dump its
-      // non-principal currencies as Tx-A "fee" because the borrower's
-      // signed skeleton doesn't include outputs for them.
-      let utxos = await rpc("getaddressutxos", [{ addresses: [lenderR], currencynames: true }]);
-      const findExact = () => {
-        // ONLY single-currency UTXOs of exactly the principal amount. A
-        // multi-currency UTXO would dump its non-principal currencies as
-        // "fee" because the borrower's signed skeleton can't accept new
-        // outputs. If no single-currency UTXO exists, we MUST split first.
-        if (principalCcy !== "VRSC") {
-          return utxos.find((u) => {
-            const cv = u.currencyvalues || {};
-            const keys = Object.keys(cv);
-            return u.satoshis === 0 && keys.length === 1 && parseFloat(cv[keys[0]]) === principalAmt;
-          });
-        }
-        return utxos.find((u) => u.satoshis === principalSats && (!u.currencyvalues || Object.keys(u.currencyvalues).length === 0));
-      };
-      let exact = findExact();
-      if (!exact) {
+      // Always auto-split a fresh single-currency UTXO via sendcurrency
+      // (matches the borrower's request flow — predictable, no UTXO picker).
+      let utxos;
+      let exact = null;
+      {
         btn.textContent = "Splitting UTXO via sendcurrency…";
         const out = principalCcy === "VRSC"
           ? [{ address: lenderR, amount: principalAmt }]
@@ -1918,9 +2432,17 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
         .map((b) => b.toString(16).padStart(2, "0")).join("");
 
       // Read existing multimap entries on lender's identity to merge with our new one.
-      const existing = (lenderInfoCache.get(acting) || (await rpc("getidentity", [acting])).identity)?.contentmultimap || {};
+      const existing = (lenderInfoCache.get(acting) || (await rpc("getidentity", [acting, -1])).identity)?.contentmultimap || {};
       const VDXF_LOAN_MATCH = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
       const newMultimap = { ...existing };
+      // Normalize preserved entries to hex strings (defensive — see
+      // accept-v2 for context).
+      for (const [k, v] of Object.entries(newMultimap)) {
+        newMultimap[k] = (Array.isArray(v) ? v : [v]).map((entry) => {
+          if (typeof entry === "string") return entry;
+          return entry?.serializedhex || entry?.message || JSON.stringify(entry);
+        });
+      }
       newMultimap[VDXF_LOAN_MATCH] = [payloadHex];
 
       const updateTxid = await rpc("updateidentity", [{
@@ -1928,13 +2450,36 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
         parent: ds.actingParent,
         contentmultimap: newMultimap,
       }]);
-      resultEl.innerHTML = `<div class="muted" style="color:var(--ok)">✓ Match posted with all 3 partials: <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(updateTxid)}" target="_blank"><code>${escapeHtml(updateTxid)}</code></a><br>Borrower can now click Accept — Tx-A will broadcast and the loan opens self-settling.</div>`;
+      resultEl.innerHTML = `<div class="muted" style="color:var(--ok)">✓ Match posted: <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(updateTxid)}" target="_blank"><code>${escapeHtml(updateTxid.slice(0,16))}…</code></a><br>Switching to Active in 3s…</div>`;
       btn.style.display = "none";
       invalidateMarketCache();
+      // Navigate to Active tab once mempool propagation has had a moment.
+      // The match is in 'matched' state immediately; once the borrower's
+      // auto-accept broadcasts Tx-A (within ~30s on auto-accept requests),
+      // the loan moves to 'active' and surfaces in the Active tab.
+      setTimeout(() => {
+        // Clear the active-op marker so loadMarket can re-render
+        const panelEl = row.querySelector(".post-match-panel");
+        if (panelEl) {
+          delete panelEl.dataset.opActive;
+          panelEl.style.display = "none";
+          panelEl.innerHTML = "";
+        }
+        // Switch to Active tab
+        const activeTabBtn = document.querySelector('[data-mp-tab="active"]');
+        if (activeTabBtn) {
+          activeTabBtn.click();
+        } else {
+          loadMarket();
+        }
+      }, 3000);
     } catch (e) {
       resultEl.innerHTML = `<div class="muted" style="color:var(--bad)">✗ ${escapeHtml(e.message)}</div>`;
       btn.disabled = false;
       btn.textContent = "Retry";
+      // Release the op-active guard so balance checks + other rows can refresh.
+      const panel = row.querySelector(".post-match-panel");
+      if (panel) delete panel.dataset.opActive;
     }
     return;
   }
@@ -1944,6 +2489,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     const r = matchByKey.get(matchKey);
     const panel = row.querySelector(".accept-panel");
     panel.style.display = "block";
+    panel.dataset.opActive = "1";   // marker so loadMarket can skip clobbering
     panel.innerHTML = `<div class="review muted">looking up request terms…</div>`;
     // Reuse what enrichMatchRowTerms already resolved if present — saves a
     // round-trip and keeps Accept usable when the explorer is rate-limiting.
@@ -1970,7 +2516,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     // Explorer strips v2-only fields like tx_a_full. Re-fetch the raw match
     // multimap entry from the lender's iaddr so we know which UI flow to show.
     try {
-      const lenderInfo = await rpc("getidentity", [r.match_iaddr]);
+      const lenderInfo = await rpc("getidentity", [r.match_iaddr, -1]);
       const VDXF_LOAN_MATCH = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
       const cm = lenderInfo?.identity?.contentmultimap || {};
       const entries = cm[VDXF_LOAN_MATCH] || [];
@@ -1993,16 +2539,22 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
         <ul style="margin:6px 0 6px 18px;font-size:13px">
           <li>Lender ${escapeHtml(r.fullyQualifiedName || r.name + "@")} commits <strong>${formatAmount(req?.principal)}</strong> to your address (per Tx-A)</li>
           <li>You commit <strong>${formatAmount(req?.collateral)}</strong> to vault <code>${escapeHtml(r.vault_address)}</code></li>
-          <li>You repay <strong>${formatAmount(req?.repay)}</strong> within <strong>${req?.term_days ?? "?"} days</strong></li>
+          <li>You repay <strong>${formatAmount(req?.repay)}</strong> within <strong>${escapeHtml(req?.term_days ?? "?")} days</strong></li>
           ${isV2 ? `<li>Tx-Repay + Tx-B are pre-signed by lender — you complete the 2-of-2 sigs locally; settlement is unilateral.</li>` : ""}
         </ul>
         ${isV2
-          ? `<button class="primary" data-mp-row-act="accept-v2" style="margin-top:6px">Accept &amp; broadcast Tx-A</button>
-             <span class="muted" style="font-size:11px;margin-left:8px">Completes 2-of-2 sigs on Tx-Repay/Tx-B, broadcasts Tx-A, posts Tx-B back via loan.status.</span>
+          ? `<div class="row" style="margin-top:6px;gap:8px">
+               <button class="primary" data-mp-row-act="accept-v2" style="flex:0 0 auto">Confirm — accept &amp; broadcast Tx-A</button>
+               <button class="ghost" data-mp-row-act="accept-cancel" style="flex:0 0 auto">Cancel</button>
+             </div>
+             <span class="muted" style="font-size:11px;display:block;margin-top:4px">Completes 2-of-2 sigs on Tx-Repay/Tx-B, broadcasts Tx-A, posts Tx-B back via loan.status.</span>
              <div class="accept-result" style="margin-top:8px"></div>`
           : hasV1Partial
-            ? `<button class="primary" data-mp-row-act="accept-broadcast" style="margin-top:6px">[v1] Broadcast Tx-A — borrow ${escapeHtml(formatAmount(req?.principal))}</button>
-               <span class="muted" style="font-size:11px;margin-left:8px">Legacy match: extends Tx-A skeleton + adds collateral. Settlement requires later cosig handshake.</span>
+            ? `<div class="row" style="margin-top:6px;gap:8px">
+                 <button class="primary" data-mp-row-act="accept-broadcast" style="flex:0 0 auto">[v1] Broadcast Tx-A — borrow ${formatAmount(req?.principal)}</button>
+                 <button class="ghost" data-mp-row-act="accept-cancel" style="flex:0 0 auto">Cancel</button>
+               </div>
+               <span class="muted" style="font-size:11px;display:block;margin-top:4px">Legacy match: extends Tx-A skeleton + adds collateral. Settlement requires later cosig handshake.</span>
                <div class="accept-result" style="margin-top:8px"></div>`
             : `<strong style="color:var(--warn)">Match has no pre-signed Tx-A.</strong>
                <div class="muted" style="font-size:11px;margin-top:4px">
@@ -2024,7 +2576,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // Explorer's typed endpoint strips v2-only fields (e.g., tx_a_full).
       // Re-fetch the raw multimap entry from the lender's iaddr to get them.
       try {
-        const lenderInfo = await rpc("getidentity", [r.match_iaddr]);
+        const lenderInfo = await rpc("getidentity", [r.match_iaddr, -1]);
         const VDXF_LOAN_MATCH = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
         const cm = lenderInfo?.identity?.contentmultimap || {};
         const entries = cm[VDXF_LOAN_MATCH] || [];
@@ -2046,6 +2598,22 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       }
       const acting = actingIaddr();
       if (!acting || acting === "all") throw new Error("select your borrower identity in the picker first");
+
+      // ── Safety verification ──────────────────────────────────────────
+      // Verify the lender's match honors the borrower's request terms
+      // exactly. Tx-A outputs are protected by the borrower's pre-signed
+      // input (any tampering invalidates the sig — broadcast would fail).
+      // Tx-Repay and Tx-B outputs are pre-signed by the LENDER with
+      // SIGHASH_SINGLE|ANYONECANPAY: lender freely chose the recipient
+      // and amount, so we must verify they match the request and pay
+      // the lender's verified primary R-address.
+      btn.textContent = "Verifying match safety…";
+      const _req = matchResolvedRequest.get(matchKey) || (r.request?.txid ? await fetchRequestFromLocalDaemon(r.request.txid).catch(() => null) : null);
+      if (!_req) throw new Error("can't verify match — original request payload not found");
+      const safetyErrors = await verifyMatchSafety(r, _req, acting);
+      if (safetyErrors.length > 0) {
+        throw new Error("Match safety check failed:\n  • " + safetyErrors.join("\n  • "));
+      }
 
       // Decode tx_a_full to verify it makes sense; pull the vault scriptPubKey for prevtxs hint.
       btn.textContent = "Decoding Tx-A & locating vault output…";
@@ -2104,13 +2672,18 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // Post Tx-B back to chain via loan.status on the borrower's identity so
       // the lender can find it for the default-claim path.
       btn.textContent = "Posting Tx-B + loan.status to your VerusID…";
-      const idInfo = await rpc("getidentity", [acting]);
+      const idInfo = await rpc("getidentity", [acting, -1]);
       const existing = idInfo?.identity?.contentmultimap || {};
       const VDXF_LOAN_STATUS = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
       const statusPayload = {
-        version: 2,
+        version: 3,
         role: "borrower",
         loan_id: txABroadcastTxid,
+        // v3: propagate the request's txid as the loan's canonical
+        // cross-lifecycle id. Lets anyone join all 4 entries by one
+        // key (request_txid) without walking the request_txid → match
+        // → tx_a_txid → loan_id chain.
+        request_txid: r.request?.txid ?? null,
         match_iaddr: r.match_iaddr,
         vault_address: r.vault_address,
         vault_redeem_script: r.vault_redeem_script,
@@ -2118,12 +2691,29 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
         collateral: req.collateral,
         repay: req.repay,
         maturity_block: r.maturity_block,
-        tx_b_complete: bSigned.hex,    // borrower-completed Tx-B for lender's default-claim
+        tx_b_complete: bSigned.hex,       // borrower-completed Tx-B for lender's default-claim
+        // Borrower-half-signed Tx-Repay (lender's vault-half from match +
+        // borrower's vault-half added). Stored on the borrower's own
+        // identity so repay-time recovery doesn't depend on the lender
+        // keeping their loan.match entry around. The borrower's
+        // localStorage cache is still the fast path; this is the durable
+        // fallback they fully control.
+        tx_repay_signed: repaySigned.hex,
         active: true,
       };
       const statusHex = Array.from(new TextEncoder().encode(JSON.stringify(statusPayload)))
         .map((b) => b.toString(16).padStart(2, "0")).join("");
       const newCm = { ...existing };
+      // Normalize all preserved entries to hex strings — getidentity may
+      // return them as objects with serializedhex/message fields, which
+      // updateidentity rejects (Invalid JSON ID parameter). Skip the
+      // VDXF we're about to write since we built it as hex above.
+      for (const [k, v] of Object.entries(newCm)) {
+        newCm[k] = (Array.isArray(v) ? v : [v]).map((entry) => {
+          if (typeof entry === "string") return entry;
+          return entry?.serializedhex || entry?.message || JSON.stringify(entry);
+        });
+      }
       newCm[VDXF_LOAN_STATUS] = [...(newCm[VDXF_LOAN_STATUS] || []), statusHex];
       const updateTxid = await rpc("updateidentity", [{
         name: idInfo.identity.name,
@@ -2135,13 +2725,32 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
         ✓ Loan opened end-to-end:<br>
         &nbsp;&nbsp;Tx-A: <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(txABroadcastTxid)}" target="_blank"><code>${escapeHtml(txABroadcastTxid)}</code></a><br>
         &nbsp;&nbsp;loan.status: <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(updateTxid)}" target="_blank"><code>${escapeHtml(updateTxid.slice(0,16))}…</code></a><br>
-        &nbsp;&nbsp;Tx-Repay stored locally — click Repay anytime to settle.
+        &nbsp;&nbsp;Refreshing Loans tab in 3s…
       </div>`;
       btn.style.display = "none";
+      invalidateMarketCache();
+      // Clear the panel + reload so the loan moves to the Active section
+      // of the Loans tab (it'll appear with state=active once mempool
+      // propagates).
+      setTimeout(() => {
+        const panelEl = row.querySelector(".accept-panel");
+        if (panelEl) {
+          delete panelEl.dataset.opActive;
+          panelEl.style.display = "none";
+          panelEl.innerHTML = "";
+        }
+        loadMarket();
+      }, 3000);
     } catch (e) {
       resultEl.innerHTML = `<div class="muted" style="color:var(--bad)">✗ ${escapeHtml(e.message)}</div>`;
       btn.disabled = false;
       btn.textContent = "Retry";
+      // Release the op-active guard so other rows + balance checks can
+      // refresh. The panel stays visible with the error + Retry button;
+      // a subsequent loadMarket may re-render the row, but the user
+      // can re-trigger Accept normally.
+      const panel = row.querySelector(".accept-panel");
+      if (panel) delete panel.dataset.opActive;
     }
     return;
   }
@@ -2169,7 +2778,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       const acting = actingIaddr();
       if (!acting || acting === "all") throw new Error("select your borrower identity in the picker first");
       // Resolve borrower R-address.
-      const idInfo = await rpc("getidentity", [acting]);
+      const idInfo = await rpc("getidentity", [acting, -1]);
       const borrowerR = (idInfo?.identity?.primaryaddresses || [])[0];
       if (!borrowerR) throw new Error("borrower identity has no primary R-address");
 
@@ -2229,7 +2838,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     if (!confirm("Cancel this entry? This posts an updateidentity that drops it from the multimap.")) return;
     btn.disabled = true; btn.textContent = "Cancelling…";
     try {
-      const info = await rpc("getidentity", [iaddr]);
+      const info = await rpc("getidentity", [iaddr, -1]);
       const cm = info?.identity?.contentmultimap || {};
       const newCm = {};
       for (const [k, v] of Object.entries(cm)) {
@@ -2241,7 +2850,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       }
       const txid = await rpc("updateidentity", [{ name, parent, contentmultimap: newCm }]);
       btn.textContent = `✓ ${txid.slice(0, 10)}…`;
-      setTimeout(() => { loadMarket(); loadIdentities(); loadActivity(); }, 3000);
+      setTimeout(() => { loadMarket(); loadIdentities(); }, 3000);
     } catch (e) {
       btn.disabled = false; btn.textContent = "Cancel";
       alert(`Cancel failed: ${e.message}`);
@@ -2258,8 +2867,6 @@ document.getElementById("market-refresh").onclick = async () => {
   invalidateMarketCache();
   await populateActingPicker();
   loadMarket();
-  loadLoans();
-  loadActivity();
 };
 
 // Cache spendable identities for the ID picker. Includes primaryR so we
@@ -2285,7 +2892,7 @@ const ensureSpendableIdsWithPrimaries = ensureSpendableIds;
 async function balanceFor(iaddr) {
   // Check the i-address itself + the primary R-address (where partial-tx-flow funds live)
   try {
-    const info = await rpc("getidentity", [iaddr]);
+    const info = await rpc("getidentity", [iaddr, -1]);
     const primaryR = (info?.identity?.primaryaddresses || [])[0];
     const out = { iaddrBalance: {}, rBalance: {}, primaryR };
     const iaddrBal = await rpc("getaddressbalance", [{ addresses: [iaddr] }]);
@@ -2388,6 +2995,13 @@ function renderRequestFormBody() {
       <label style="flex:1">Term (days)<input type="number" data-f="term_days" value="30" /></label>
     </div>
     <div class="muted" style="font-size:11px;margin-top:4px">Repay is paid in the same currency as the loan.</div>
+    <div class="row" style="margin-top:6px">
+      <label style="display:flex;gap:8px;align-items:center;cursor:pointer;font-size:12px">
+        <input type="checkbox" data-f="auto_accept" ${localStorage.getItem("vl_auto_accept") === "0" ? "" : "checked"} />
+        <span>Auto-confirm if the lender's match honors these exact terms</span>
+      </label>
+    </div>
+    <div class="muted" style="font-size:11px;margin-top:-2px;margin-left:24px">When the lender posts a match: if the 7-check safety verification passes (recipients/amounts/maturity/vault all match this request), Tx-A is broadcast automatically — no second click needed. If anything is off, the match shows in Inbox for manual review.</div>
     <div class="row" style="margin-top:8px;gap:8px">
       <button class="primary" data-mp-do="preview-request" style="flex:0 0 auto">Preview &amp; sign</button>
       <button class="ghost"   data-mp-do="cancel" style="flex:0 0 auto">Cancel</button>
@@ -2494,9 +3108,16 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
     resEl.innerHTML = `<span class="muted">Broadcasting…</span>`;
     try {
       const txid = await rpc("updateidentity", [updateArg]);
-      resEl.innerHTML = `<span class="ok">✓ Broadcast: <code>${escapeHtml(txid)}</code></span>`;
+      resEl.innerHTML = `<span class="ok">✓ Broadcast: <code>${escapeHtml(txid)}</code></span> <span class="muted">— closing in a moment, refreshing marketplace…</span>`;
       pendingMarketBroadcast = null;
-      setTimeout(() => { loadIdentities(); loadMarket(); loadActivity(); }, 3000);
+      // Invalidate so the next loadMarket re-fetches and surfaces the new post.
+      invalidateMarketCache();
+      // Auto-dismiss the form so the user isn't left staring at the preview.
+      setTimeout(() => {
+        formEl.style.display = "none";
+        formEl.innerHTML = "";
+      }, 2500);
+      setTimeout(() => { loadIdentities(); loadMarket(); }, 3000);
     } catch (e) {
       resEl.innerHTML = `<span class="err">✗ ${escapeHtml(e.message)}</span>`;
     }
@@ -2528,7 +3149,7 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
       return;
     }
     let lenderInfo = null;
-    try { lenderInfo = await rpc("getidentity", [lenderInput]); } catch {}
+    try { lenderInfo = await rpc("getidentity", [lenderInput, -1]); } catch {}
     if (!lenderInfo?.identity) {
       previewEl.innerHTML = `<div class="review" style="color:var(--bad)">✗ Could not resolve lender VerusID "${escapeHtml(lenderInput)}".</div>`;
       previewEl.style.display = "block";
@@ -2638,14 +3259,23 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
       return;
     }
 
+    // Read auto-accept preference and persist for next time
+    const autoAcceptCheckbox = formEl.querySelector('[data-f="auto_accept"]');
+    const autoAccept = !!(autoAcceptCheckbox && autoAcceptCheckbox.checked);
+    try { localStorage.setItem("vl_auto_accept", autoAccept ? "1" : "0"); } catch {}
+
     payload = {
-      version: 2,
+      version: 3,
       principal:  { currency: principalCurrency,  amount: principalAmount  },
       collateral: { currency: collateralCurrency, amount: collateralAmount },
       repay:      { currency: principalCurrency,  amount: repayAmount      },
       term_days:  termDays,
       target_lender_iaddr:        lenderIaddr,
       borrower_input_signed_hex:  signedHex,
+      // v3: auto_accept flag tells the borrower's GUI (this device or any
+      // other one logged into this iaddr) to auto-broadcast Tx-A when a
+      // match arrives that passes verifyMatchSafety against this request.
+      auto_accept: autoAccept,
       active:     true,
     };
   } else if (action === "preview-offer") {
@@ -2667,7 +3297,7 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
 
   // Merge with existing entries
   let existing = {};
-  try { existing = (await rpc("getidentity", [iaddr]))?.identity?.contentmultimap || {}; } catch {}
+  try { existing = (await rpc("getidentity", [iaddr, -1]))?.identity?.contentmultimap || {}; } catch {}
   const json = JSON.stringify(payload);
   const hex  = Array.from(new TextEncoder().encode(json)).map((b) => b.toString(16).padStart(2, "0")).join("");
   const newCm = { ...existing, [vdxfId]: [hex] };
@@ -2703,8 +3333,113 @@ let pendingMarketBroadcast = null;
 
 // ---------- Active loans ----------
 
-async function loadLoans() {
-  const el = document.getElementById("loans-list");
+// Walk an identity's contentMultimap directly via local daemon to surface
+// active loans where this iaddr is borrower OR lender. Authoritative when
+// reachable; throws if any RPC fails so the caller can fall back to the
+// explorer API.
+async function fetchActiveLoansFromDaemon(actingIa) {
+  if (!actingIa || actingIa === "all") return [];
+  const VDXF_LOAN_REQUEST = "iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28";
+  const VDXF_LOAN_MATCH   = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
+  const VDXF_LOAN_STATUS  = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
+  const VDXF_LOAN_HISTORY = "i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb";
+
+  const decode = (e) => {
+    const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+    if (!hex) return null;
+    try { return JSON.parse(new TextDecoder().decode(_hexToBytes(hex))); }
+    catch { return null; }
+  };
+  const isStillActive = (status, history) =>
+    !history && status && status.active !== false && status.settled !== true;
+
+  const info = await rpc("getidentity", [actingIa, -1]);
+  const cm = info?.identity?.contentmultimap || {};
+
+  const out = [];
+  const seen = new Set();
+
+  // Borrower path: my own loan.status entries (status is posted on the
+  // borrower's identity at acceptance). loan.history (also posted on
+  // borrower) terminates the loan.
+  const myStatuses  = (cm[VDXF_LOAN_STATUS]  || []).map(decode).filter(Boolean);
+  const myHistories = (cm[VDXF_LOAN_HISTORY] || []).map(decode).filter(Boolean);
+  const histByLoanId = new Map(myHistories.filter((h) => h.loan_id).map((h) => [h.loan_id, h]));
+  for (const s of myStatuses) {
+    if (!s.loan_id || s.role !== "borrower") continue;
+    if (!isStillActive(s, histByLoanId.get(s.loan_id))) continue;
+    if (seen.has(s.loan_id)) continue;
+    seen.add(s.loan_id);
+    out.push({
+      loan_id:        s.loan_id,
+      tx_a_txid:      s.loan_id,
+      fullyQualifiedName: info.identity.fullyqualifiedname || "",
+      name:           info.identity.name || "",
+      role:           "borrower",
+      counterparty_iaddr: s.match_iaddr,
+      vault_address:  s.vault_address,
+      principal:      s.principal,
+      collateral:     s.collateral,
+      repay:          s.repay,
+      maturity_block: s.maturity_block,
+    });
+  }
+
+  // Lender path: my loan.match entries → pull borrower's loan.status to
+  // confirm origination + active state. If borrower hasn't broadcast Tx-A
+  // yet (no loan.status), surface as 'matched' with a "waiting for borrower"
+  // indicator so the lender sees their pending commitment immediately
+  // after posting the match instead of an empty Active tab.
+  const myMatches = (cm[VDXF_LOAN_MATCH] || []).map(decode).filter(Boolean);
+  for (const m of myMatches) {
+    const txAtxid = m.tx_a_txid;
+    const borrowerIa = m.request?.iaddr;
+    if (!txAtxid || !borrowerIa) continue;
+    if (seen.has(txAtxid)) continue;
+    if (m.active === false) continue; // lender cancelled this match
+
+    const bInfo = await rpc("getidentity", [borrowerIa, -1]).catch(() => null);
+    const bcm = bInfo?.identity?.contentmultimap || {};
+    let bStatus = null, bHistory = null;
+    for (const e of (bcm[VDXF_LOAN_STATUS] || [])) {
+      const j = decode(e);
+      if (j?.loan_id === txAtxid) { bStatus = j; break; }
+    }
+    for (const e of (bcm[VDXF_LOAN_HISTORY] || [])) {
+      const j = decode(e);
+      if (j?.loan_id === txAtxid) { bHistory = j; break; }
+    }
+    // Past terminal state — skip (already in History).
+    if (bHistory) continue;
+    // Past 'active' (settled flag flipped) — skip.
+    if (bStatus && (bStatus.active === false || bStatus.settled === true)) continue;
+    seen.add(txAtxid);
+    const isMatched = !bStatus; // borrower hasn't broadcast Tx-A yet
+    out.push({
+      loan_id:        txAtxid,
+      tx_a_txid:      txAtxid,
+      fullyQualifiedName: info.identity.fullyqualifiedname || "",
+      name:           info.identity.name || "",
+      role:           "lender",
+      state:          isMatched ? "matched" : "active",
+      counterparty_iaddr: borrowerIa,
+      vault_address:  bStatus?.vault_address || m.vault_address,
+      principal:      bStatus?.principal     || m.principal,
+      collateral:     bStatus?.collateral    || m.collateral,
+      repay:          bStatus?.repay         || m.repay,
+      maturity_block: bStatus?.maturity_block || m.maturity_block,
+    });
+  }
+
+  return out;
+}
+
+async function loadLoans(targetEl) {
+  // Render into the Active sub-tab of the Loans section by default; the
+  // legacy top-level "Active loans" section is gone but callers can still
+  // pass a different el if needed.
+  const el = targetEl || document.getElementById("market-list") || document.getElementById("loans-list");
+  if (!el) return;
   el.textContent = "Loading…";
   const myIaddrs = await inScopeIaddrs();
   if (myIaddrs.length === 0) {
@@ -2712,15 +3447,43 @@ async function loadLoans() {
     return;
   }
 
-  // Source 1: explorer's typed /contracts/loans/active feed
-  const explorerLoans = (await Promise.all(
-    myIaddrs.map((ia) =>
-      fetch(`${EXPLORER_API}/contracts/loans/active?iaddr=${encodeURIComponent(ia)}`)
-        .then((r) => r.json())
-        .then((j) => j.results || [])
-        .catch(() => [])
-    )
-  )).flat();
+  // Source 1: walk our own identity's contentMultimap via local daemon to
+  // build the active-loans view. Catches both sides:
+  //   - borrower role: my loan.status entries directly (filter active)
+  //   - lender   role: my loan.match entries → fetch borrower's loan.status
+  //                    to confirm Tx-A originated and not yet settled
+  // Falls back to /by-party explorer API only if any RPC throws — daemon
+  // is the authoritative source when reachable.
+  const acting = actingIaddr();
+  const partyAddrs = (acting && acting !== "all") ? [acting] : myIaddrs;
+  let explorerLoans;
+  try {
+    explorerLoans = (await Promise.all(partyAddrs.map(fetchActiveLoansFromDaemon))).flat();
+  } catch (e) {
+    console.warn("[active] daemon walk failed, falling back to API:", e?.message);
+    explorerLoans = (await Promise.all(
+      partyAddrs.map((ia) =>
+        fetchLoansByParty(ia, 'active')
+          .then((j) => (j.results || []).map((row) => {
+            const isBorrower = ia === row.borrower_iaddr;
+            return {
+              loan_id:        row.loan_id,
+              tx_a_txid:      row.loan_id,
+              fullyQualifiedName: '',
+              name:           '',
+              role:           isBorrower ? 'borrower' : 'lender',
+              counterparty_iaddr: isBorrower ? row.lender_iaddr : row.borrower_iaddr,
+              vault_address:  row.vault_address,
+              principal:      row.principal,
+              collateral:     row.collateral,
+              repay:          row.repay,
+              maturity_block: row.maturity_block,
+            };
+          }))
+          .catch(() => [])
+      )
+    )).flat();
+  }
 
   // Source 2: borrower-side localStorage. Every accept-v2 stashes Tx-Repay
   // under `vl_tx_repay_<txAtxid>`. Parse loan.status entries on each
@@ -2728,7 +3491,7 @@ async function loadLoans() {
   const localLoans = [];
   for (const ia of myIaddrs) {
     let info;
-    try { info = await rpc("getidentity", [ia]); } catch { continue; }
+    try { info = await rpc("getidentity", [ia, -1]); } catch { continue; }
     const cm = info?.identity?.contentmultimap || {};
     const VDXF_LOAN_STATUS = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
     for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
@@ -2767,6 +3530,10 @@ async function loadLoans() {
   }
   const flat = Array.from(byId.values());
 
+  // Update the Active count badge while we know the answer
+  const _ctActive = document.getElementById("ct-active");
+  if (_ctActive) _ctActive.textContent = String(flat.length);
+
   if (flat.length === 0) {
     const acting = actingIaddr();
     // Don't wipe the list if a repay/claim op is mid-flight (the empty
@@ -2779,15 +3546,19 @@ async function loadLoans() {
   // otherwise the repay handler ends up writing to a detached node.
   if (el.querySelector('.mp-row[data-op-active="1"]')) return;
   el.innerHTML = flat.map(renderActiveLoan).join("");
+  enrichActiveLoanBalances();
 }
 
 function renderActiveLoan(r) {
   const hasRepay = r.role === "borrower" && r.tx_repay_local;
+  const isMatched = r.state === "matched";
   return `
-    <div class="card mp-row" data-loan-id="${escapeHtml(r.loan_id || r.tx_a_txid || "")}">
+    <div class="card mp-row" data-loan-id="${escapeHtml(r.loan_id || r.tx_a_txid || "")}" data-repay-currency="${escapeHtml(r.repay?.currency || "")}" data-repay-amount="${escapeHtml(r.repay?.amount ?? "")}">
       <div class="row">
         <strong style="flex:1">${escapeHtml(r.fullyQualifiedName || r.name + "@")}</strong>
-        <span class="badge ${r.role}">${escapeHtml(r.role)}</span>
+        ${isMatched
+          ? `<span class="badge" style="background:rgba(255,193,7,0.15);color:#e6b800">waiting for borrower</span>`
+          : `<span class="badge ${r.role}">${escapeHtml(r.role)}</span>`}
       </div>
       <div class="kv">
         <div><span class="k">counterparty</span><span class="v">${escapeHtml(r.counterparty_iaddr || "—")}</span></div>
@@ -2795,11 +3566,14 @@ function renderActiveLoan(r) {
         <div><span class="k">principal</span><span class="v">${formatAmount(r.principal)}</span></div>
         <div><span class="k">collateral</span><span class="v">${formatAmount(r.collateral)}</span></div>
         <div><span class="k">repay</span><span class="v">${formatAmount(r.repay)}</span></div>
-        <div><span class="k">maturity</span><span class="v">block ${r.maturity_block ?? "?"}</span></div>
+        ${!isMatched ? `<div><span class="k">your balance</span><span class="v repay-balance muted">checking…</span></div>` : ""}
+        <div><span class="k">maturity</span><span class="v">${isMatched ? "—" : `block ${r.maturity_block ?? "?"}`}</span></div>
         <div><span class="k">loan_id</span><span class="v"><code>${escapeHtml((r.loan_id || "—").slice(0, 20))}…</code></span></div>
       </div>
       <div class="row" style="margin-top:10px">
-        ${r.role === "borrower"
+        ${isMatched
+          ? `<span class="muted" style="font-size:12px">Match posted — borrower's auto-accept will broadcast Tx-A within ~30s. Loan opens self-settling.</span>`
+          : r.role === "borrower"
           ? hasRepay
             ? `<button class="primary" data-loan-act="repay">Repay</button>
                <span class="muted" style="font-size:11px;margin-left:8px">Auto-splits a fresh repayment UTXO + extends Tx-Repay + broadcasts. Then posts loan.history (settled).</span>`
@@ -2811,8 +3585,82 @@ function renderActiveLoan(r) {
   `;
 }
 
-// Click handler for the active-loans list — Repay (and later Claim collateral).
-document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
+// After the Active loans cards render, fill in each card's "your
+// balance" line. Verus network fees are always paid in VRSC, so for
+// non-VRSC repay loans the borrower needs:
+//   - exactly repayAmt of the loan currency (sent to lender on Tx-Repay
+//     output 0; loan-currency math must balance to zero, no fee in it)
+//   - ~0.0003 VRSC across three side-effect txs (split sendcurrency +
+//     Tx-Repay broadcast + loan.history updateidentity)
+// For VRSC repay loans, all three come out of the same VRSC balance.
+const REPAY_VRSC_FEE = 0.0003;
+async function enrichActiveLoanBalances() {
+  const cards = document.querySelectorAll('#market-list .mp-row[data-loan-id]');
+  for (const card of cards) {
+    const cell = card.querySelector('.repay-balance');
+    if (!cell) continue;
+    const repayCcy = card.dataset.repayCurrency;
+    const repayAmt = parseFloat(card.dataset.repayAmount);
+    if (!repayCcy || !repayAmt) { cell.textContent = '—'; continue; }
+    const acting = actingIaddr();
+    if (!acting || acting === 'all') { cell.textContent = '(set acting ID)'; continue; }
+    try {
+      const info = await rpc('getidentity', [acting, -1]);
+      const r = (info?.identity?.primaryaddresses || [])[0];
+      if (!r) { cell.textContent = '(no R)'; continue; }
+      const bal = await rpc('getaddressbalance', [{ addresses: [r] }]);
+      const vrscHave = (bal?.balance ?? 0) / 1e8;
+      const fmt = (n) => n.toFixed(8).replace(/\.?0+$/, '');
+
+      if (repayCcy === 'VRSC') {
+        // All-VRSC: repay + network fees from a single balance.
+        const need = repayAmt + REPAY_VRSC_FEE;
+        const enough = vrscHave >= need;
+        cell.classList.remove('muted');
+        cell.innerHTML = enough
+          ? `<span style="color:var(--ok)">${fmt(vrscHave)} VRSC</span> <span class="muted" style="font-size:11px">(need ${need.toFixed(4)}: ${repayAmt} repay + ${REPAY_VRSC_FEE} network fees)</span>`
+          : `<span style="color:var(--bad)">${fmt(vrscHave)} VRSC</span> <span class="muted" style="font-size:11px">(need ${need.toFixed(4)} — short ${(need - vrscHave).toFixed(4)})</span>`;
+        if (!enough) {
+          const btn = card.querySelector('[data-loan-act="repay"]');
+          if (btn) { btn.disabled = true; btn.title = `Insufficient VRSC: have ${vrscHave}, need ${need}.`; }
+        }
+        continue;
+      }
+
+      // Non-VRSC repay: loan currency covers exactly the repayment;
+      // VRSC covers all network fees.
+      const cb = bal?.currencybalance || {};
+      const ccyId = (await rpc('getcurrency', [repayCcy]).catch(() => null))?.currencyid;
+      const ccyHave = parseFloat(cb[repayCcy] ?? cb[ccyId] ?? 0);
+      const ccyOk  = ccyHave  >= repayAmt;
+      const vrscOk = vrscHave >= REPAY_VRSC_FEE;
+      const enough = ccyOk && vrscOk;
+      cell.classList.remove('muted');
+      const ccyLine = `<span style="color:var(${ccyOk  ? '--ok' : '--bad'})">${fmt(ccyHave)} ${escapeHtml(repayCcy)}</span> <span class="muted" style="font-size:11px">(need ${repayAmt} to lender)</span>`;
+      const feeLine = `<span style="color:var(${vrscOk ? '--ok' : '--bad'})">${fmt(vrscHave)} VRSC</span> <span class="muted" style="font-size:11px">(need ${REPAY_VRSC_FEE} for network fees)</span>`;
+      cell.innerHTML = `${ccyLine}<br>${feeLine}`;
+      if (!enough) {
+        const btn = card.querySelector('[data-loan-act="repay"]');
+        if (btn) {
+          btn.disabled = true;
+          const shortMsg = [
+            !ccyOk  ? `${repayCcy}: short ${(repayAmt - ccyHave).toFixed(4)}` : null,
+            !vrscOk ? `VRSC: short ${(REPAY_VRSC_FEE - vrscHave).toFixed(4)}` : null,
+          ].filter(Boolean).join(', ');
+          btn.title = `Insufficient balance — ${shortMsg}`;
+        }
+      }
+    } catch (e) {
+      cell.textContent = `(${e.message})`;
+    }
+  }
+}
+
+// Click handler for the Active loans rows — Repay (and Claim collateral
+// when wired). Attached to #market-list now that Active is a sub-tab of
+// the Loans section, with a fallback to the legacy #loans-list for any
+// older layout that might still exist.
+(document.getElementById("market-list") || document.getElementById("loans-list"))?.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("[data-loan-act]");
   if (!btn) return;
   const card = btn.closest(".mp-row");
@@ -2824,12 +3672,10 @@ document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
   if (btn.dataset.loanAct === "repay") {
     btn.disabled = true; btn.textContent = "Loading Tx-Repay…";
     try {
-      const txRepayHex = localStorage.getItem(`vl_tx_repay_${loanId}`);
-      if (!txRepayHex) throw new Error(`Tx-Repay for loan ${loanId.slice(0,16)}… not in localStorage`);
-
-      // Reload loan metadata from the borrower's loan.status entry
+      // Load borrower's loan.status first — needed for repay terms AND
+      // for the on-chain recovery fallback if localStorage is empty.
       const acting = actingIaddr();
-      const idInfo = await rpc("getidentity", [acting]);
+      const idInfo = await rpc("getidentity", [acting, -1]);
       const cm = idInfo?.identity?.contentmultimap || {};
       const VDXF_LOAN_STATUS = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
       let status = null;
@@ -2842,16 +3688,88 @@ document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
       }
       if (!status) throw new Error("loan.status entry not found on this identity");
 
+      // Tx-Repay recovery cascade:
+      //   1. localStorage cache — fastest path, no RPC
+      //   2. borrower's own loan.status.tx_repay_signed — durable + self-
+      //      controlled (added at accept time post-Verus-loans-v3.1).
+      //      Doesn't depend on the lender keeping their loan.match.
+      //   3. lender's loan.match.tx_repay_partial — re-sign borrower's
+      //      vault-half via signrawtransaction. Trust dependency on the
+      //      lender; works for older accept flows that didn't mirror the
+      //      partial into loan.status.
+      let txRepayHex = localStorage.getItem(`vl_tx_repay_${loanId}`);
+      if (!txRepayHex && status.tx_repay_signed) {
+        // Borrower-half-signed Tx-Repay was mirrored into loan.status at
+        // accept time. Just use it directly — no re-signing needed.
+        btn.textContent = "Recovering Tx-Repay from your loan.status…";
+        txRepayHex = status.tx_repay_signed;
+        try { localStorage.setItem(`vl_tx_repay_${loanId}`, txRepayHex); } catch {}
+      }
+      if (!txRepayHex) {
+        btn.textContent = "Recovering Tx-Repay from lender's loan.match…";
+        const lenderIa = status.match_iaddr;
+        if (!lenderIa) throw new Error("loan.status missing match_iaddr — can't recover Tx-Repay from chain");
+        const lenderInfo = await rpc("getidentity", [lenderIa, -1]);
+        const lcm = lenderInfo?.identity?.contentmultimap || {};
+        const VDXF_LOAN_MATCH = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
+        let matchPayload = null;
+        for (const e of (lcm[VDXF_LOAN_MATCH] || [])) {
+          const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+          try {
+            const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+            if (j.tx_a_txid === loanId) { matchPayload = j; break; }
+          } catch {}
+        }
+        if (!matchPayload?.tx_repay_partial || !matchPayload?.vault_redeem_script) {
+          throw new Error(`Tx-Repay partial not recoverable: not in your loan.status (older accept flow) and lender ${lenderIa.slice(0,12)}'s loan.match doesn't have it either.`);
+        }
+        // Make sure the wallet knows the vault P2SH so it can sign for it.
+        const rs = _hexToBytes(matchPayload.vault_redeem_script);
+        if (rs.length === 71 && rs[0] === 0x52 && rs[1] === 0x21 && rs[35] === 0x21 && rs[69] === 0x52 && rs[70] === 0xae) {
+          const pubA = _bytesToHex(rs.slice(2, 35));
+          const pubB = _bytesToHex(rs.slice(36, 69));
+          try { await rpc("addmultisigaddress", [2, [pubA, pubB]]); } catch {}
+        }
+        // Locate the vault output in the on-chain Tx-A so signrawtransaction has
+        // a proper prevtx pointer for the SINGLE|ANYONECANPAY vault input.
+        const txA = await rpc("getrawtransaction", [loanId, 1]);
+        const vaultVout = (txA.vout || []).findIndex((o) => (o.scriptPubKey?.addresses || []).includes(matchPayload.vault_address));
+        if (vaultVout < 0) throw new Error("vault output not found in Tx-A");
+        const vaultOut = txA.vout[vaultVout];
+        const prevtxsHint = [{
+          txid: loanId,
+          vout: vaultVout,
+          scriptPubKey: vaultOut.scriptPubKey?.hex,
+          redeemScript: matchPayload.vault_redeem_script,
+          amount: parseFloat(status.collateral?.amount ?? vaultOut.value),
+        }];
+        const repaySigned = await rpc("signrawtransaction", [matchPayload.tx_repay_partial, prevtxsHint, null, "SINGLE|ANYONECANPAY"]);
+        if (!repaySigned.complete) throw new Error("Tx-Repay vault-half re-sign incomplete: " + JSON.stringify(repaySigned.errors || {}));
+        txRepayHex = repaySigned.hex;
+        try { localStorage.setItem(`vl_tx_repay_${loanId}`, txRepayHex); } catch {}
+      }
+
       const repayCcy = status.repay?.currency;
       const repayAmt = parseFloat(status.repay?.amount);
       if (!repayCcy || !repayAmt) throw new Error("loan.status missing repay terms");
 
       const borrowerR = (idInfo.identity.primaryaddresses || [])[0];
       btn.textContent = "Splitting fresh repayment UTXO…";
-      // Auto-split a clean UTXO of (repay amount + 0.0001 fee buffer).
+      // Native fee policy: Tx-Repay's fee should always come out of VRSC,
+      // not the loan currency, even though Verus's reserve-feepool would
+      // accept reserve-currency fees. Two cases:
+      //   - VRSC repay: split repayAmt + 0.0001 — the +0.0001 is consumed
+      //     as the VRSC fee (only one input from the split needed).
+      //   - Non-VRSC repay: split TWO clean UTXOs in one sendcurrency —
+      //     repayAmt of the loan currency for the lender's output, AND
+      //     0.0001 VRSC fully consumed as the network fee.
+      const FEE_VRSC = 0.0001;
       const splitOut = repayCcy === "VRSC"
-        ? [{ address: borrowerR, amount: repayAmt + 0.0001 }]
-        : [{ currency: repayCcy, amount: repayAmt + 0.0001, address: borrowerR }];
+        ? [{ address: borrowerR, amount: repayAmt + FEE_VRSC }]
+        : [
+            { currency: repayCcy, amount: repayAmt, address: borrowerR },
+            { address: borrowerR, amount: FEE_VRSC },
+          ];
       const opid = await rpc("sendcurrency", [borrowerR, splitOut]);
       let splitTxid;
       for (let i = 0; i < 30 && !splitTxid; i++) {
@@ -2862,10 +3780,14 @@ document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
       }
       if (!splitTxid) throw new Error("split timed out");
 
-      // Find new clean UTXO in the split tx (mempool)
+      // Find clean UTXO(s) in the split tx (mempool).
       const splitTx = await rpc("getrawtransaction", [splitTxid, 1]);
-      const repaySats = Math.round((repayAmt + 0.0001) * 1e8);
-      let splitVout = -1;
+      const repaySats = repayCcy === "VRSC"
+        ? Math.round((repayAmt + FEE_VRSC) * 1e8)
+        : Math.round(repayAmt * 1e8);
+      const feeSats = Math.round(FEE_VRSC * 1e8);
+      let splitVout = -1;        // index of the loan-currency repayment UTXO
+      let feeVout = -1;          // index of the VRSC fee UTXO (non-VRSC case only)
       for (let i = 0; i < (splitTx?.vout || []).length; i++) {
         const o = splitTx.vout[i];
         const spk = o?.scriptPubKey || {};
@@ -2875,19 +3797,28 @@ document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
         if (repayCcy === "VRSC") {
           if (cvKeys.length === 0 && o.valueSat === repaySats) { splitVout = i; break; }
         } else {
-          // Allow tiny float tolerance — compare via integer satoshis would need ccy lookup
-          if (o.valueSat === 0 && cvKeys.length === 1 && Math.round(parseFloat(Object.values(cv)[0]) * 1e8) === repaySats) { splitVout = i; break; }
+          if (splitVout < 0 && o.valueSat === 0 && cvKeys.length === 1 &&
+              Math.round(parseFloat(Object.values(cv)[0]) * 1e8) === repaySats) {
+            splitVout = i;
+          } else if (feeVout < 0 && cvKeys.length === 0 && o.valueSat === feeSats) {
+            feeVout = i;
+          }
+          if (splitVout >= 0 && feeVout >= 0) break;
         }
       }
       if (splitVout < 0) throw new Error("split tx didn't produce a clean repayment output");
+      if (repayCcy !== "VRSC" && feeVout < 0) throw new Error("split tx didn't produce a clean VRSC fee output");
 
       btn.textContent = "Extending Tx-Repay…";
-      // Extend Tx-Repay: append borrower's repayment input + collateral-return output.
-      // SIGHASH_SINGLE|ANYONECANPAY on input 0 (vault) commits to output 0 only,
-      // so we can freely add input 1 + outputs.
+      // Extend Tx-Repay. SIGHASH_SINGLE|ANYONECANPAY on input 0 (vault)
+      // commits to output 0 only — we can freely add inputs and outputs.
+      // Order of new inputs: [repayment, fee?]; order of new outputs: [collateral-return].
       const tx = _parseTx(txRepayHex);
       const txidLE = _hexToBytes(splitTxid).reverse();
       tx.vins.push({ prevTxid: txidLE, prevVout: splitVout, scriptSig: new Uint8Array(0), sequence: 0xffffffff });
+      if (repayCcy !== "VRSC") {
+        tx.vins.push({ prevTxid: txidLE, prevVout: feeVout, scriptSig: new Uint8Array(0), sequence: 0xffffffff });
+      }
       // Add output 1: collateral-return → borrower
       const collateralCcy = status.collateral?.currency;
       const collateralAmt = parseFloat(status.collateral?.amount);
@@ -2911,9 +3842,13 @@ document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
       btn.textContent = "Posting loan.history (settled)…";
       const VDXF_LOAN_HISTORY = "i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb";
       const historyPayload = {
-        version: 1,
+        version: 2,
         role: "borrower",
         loan_id: loanId,
+        // v2: propagate request_txid (read from the local loan.status
+        // entry that was posted at accept time) so the canonical loan
+        // join works on this entry too.
+        request_txid: status.request_txid ?? null,
         outcome: "repaid",
         tx_repay_txid: repayBroadcastTxid,
         repaid_at_block: await rpc("getblockcount"),
@@ -2964,16 +3899,23 @@ document.getElementById("loans-list")?.addEventListener("click", async (ev) => {
   }
 });
 
-document.getElementById("loans-refresh").onclick = async () => {
-  cachedSpendableIds = []; pickerByR = new Map();
-  await populateActingPicker();
-  loadLoans();
-};
+// Legacy refresh buttons — only attach if the corresponding section
+// still exists. With the Loans-section restructure, refresh is via the
+// shared #market-refresh button.
+const _loansRefreshBtn = document.getElementById("loans-refresh");
+if (_loansRefreshBtn) {
+  _loansRefreshBtn.onclick = async () => {
+    cachedSpendableIds = []; pickerByR = new Map();
+    await populateActingPicker();
+    loadMarket();
+  };
+}
 
 // ---------- Activity feed ----------
 
-async function loadActivity() {
-  const el = document.getElementById("activity-list");
+async function loadActivity(targetEl) {
+  const el = targetEl || document.getElementById("market-list") || document.getElementById("activity-list");
+  if (!el) return;
   el.textContent = "Loading…";
   const myIaddrs = await inScopeIaddrs();
   if (myIaddrs.length === 0) {
@@ -2981,80 +3923,252 @@ async function loadActivity() {
     return;
   }
 
-  // Fetch full history for each local iaddr (all multimap-touching events, not just current state)
-  const all = await Promise.all(
-    myIaddrs.map((ia) =>
-      Promise.all(
-        ["loan.offer", "loan.request", "loan.match", "loan.status"].map((slug) =>
-          fetch(`${EXPLORER_API}/identity/events?type=${slug}&iAddress=${encodeURIComponent(ia)}&history=true&pageSize=50`)
-            .then((r) => r.json())
-            .then((j) => (j.results || []).map((ev) => ({ ...ev, _slug: slug })))
-            .catch(() => [])
+  // History = terminal-state loans only (repaid or defaulted). One row
+  // per loan, joined via /loans/by-party. Open requests, in-flight
+  // status updates, etc. live in other tabs.
+  const acting = actingIaddr();
+  const partyAddrs = (acting && acting !== "all") ? [acting] : myIaddrs;
+  const results = (await Promise.all(
+    partyAddrs.map((ia) =>
+      fetchLoansByParty(ia)
+        .then((j) => (j.results || [])
+          .filter((row) => row.state === 'repaid' || row.state === 'defaulted')
+          .map((row) => ({ ...row, _myIaddr: ia, _myRole: ia === row.borrower_iaddr ? 'borrower' : 'lender' }))
         )
-      ).then((rs) => rs.flat())
+        .catch(() => [])
     )
-  );
-  const flat = all.flat();
-  // Sort newest first by block then id
-  flat.sort((a, b) => (b.chain?.blockHeight ?? 0) - (a.chain?.blockHeight ?? 0));
+  )).flat();
+
+  // De-dupe by loan_id (when both sides are local, same loan shows up twice)
+  const byId = new Map();
+  for (const r of results) byId.set(r.loan_id || r.request_txid, r);
+  const flat = Array.from(byId.values())
+    .sort((a, b) => (b.posted_block ?? 0) - (a.posted_block ?? 0));
+
+  const _ctHistory = document.getElementById("ct-history");
+  if (_ctHistory) _ctHistory.textContent = String(flat.length);
+
   if (flat.length === 0) {
-    el.innerHTML = `<div class="empty">No contract activity on any local identity yet.</div>`;
+    el.innerHTML = `<div class="empty">No completed loans yet.</div>`;
     return;
   }
-  el.innerHTML = flat.map(renderActivityRow).join("");
+  el.innerHTML = flat.map(renderHistoryRow).join("");
+  enrichHistoryRows();
 }
 
 function renderActivityRow(ev) {
   const slug = ev.type || ev._slug;
   const fqn = ev.source?.fullyQualifiedName || ev.source?.name + "@" || "?";
-  const p = ev.entries?.[0]?.decoded;
-  let summary = "(undecoded)";
-  if (slug === "loan.request" && p?.principal) {
-    summary = `Borrow ${formatAmount(p.principal)} · ${formatAmount(p.collateral)} collateral · repay ${formatAmount(p.repay)} / ${p.term_days ?? "?"}d`;
-  } else if (slug === "loan.offer" && p) {
-    if (p.max_principal) {
-      summary = `Up to ${formatAmount(p.max_principal)} · ≥${p.min_collateral_ratio?.toFixed?.(2) ?? "?"}× collateral · ${p.rate != null ? (p.rate*100).toFixed(1) + "%" : "?"} / ${p.term_days ?? "?"}d`;
-    } else if (p.principal) {
-      summary = `[legacy] Lend ${formatAmount(p.principal)} for ${formatAmount(p.collateral)} · ${p.rate != null ? (p.rate*100).toFixed(1) + "%" : "?"} / ${p.term_days ?? "?"}d`;
-    }
-  } else if (slug === "loan.match" && p) {
-    summary = `Match for request ${p.request?.iaddr?.slice(0,12) || "?"}… · vault ${p.vault_address?.slice(0,12) || "?"}…`;
-  } else if (slug === "loan.status" && p) {
-    summary = `${p.role} · ${formatAmount(p.principal)} → repay ${formatAmount(p.repay)} · ${p.settled ? "SETTLED" : "active"}`;
-  }
-  const ts = ev.chain?.timestamp ? new Date(ev.chain.timestamp).toISOString().slice(0, 16).replace("T", " ") : "—";
-  const txid = ev.chain?.txid || "";
+  // Legacy renderActivityRow — replaced by renderHistoryRow.
+  return "";
+}
+
+// One row per completed loan. Shows borrower↔lender, principal/repay,
+// origination + settlement timestamps. The two timestamps come from
+// looking up tx confirmation blocks via local daemon (enrichHistoryRows),
+// not from the explorer API.
+function renderHistoryRow(row) {
+  const role = row._myRole;
+  const borrowerIa = row.borrower_iaddr;
+  const lenderIa   = row.lender_iaddr;
+  const counterpartyIa = role === 'borrower' ? lenderIa : borrowerIa;
+  const outcome = row.state === 'repaid' ? 'repaid' : 'defaulted';
+  const youDid  = role === 'borrower'
+    ? (outcome === 'repaid' ? 'You repaid' : 'You defaulted on')
+    : (outcome === 'repaid' ? 'You were repaid' : 'You seized collateral on');
   return `
-    <div class="card">
+    <div class="card mp-row" data-loan-id="${escapeHtml(row.loan_id || '')}" data-tx-repay="${escapeHtml(row.tx_repay_txid || '')}">
       <div class="row" style="margin-bottom:6px">
-        <strong style="flex:1">${escapeHtml(fqn)}</strong>
-        <span class="badge ${slug.replace('.','-')}">${escapeHtml(slug)}</span>
+        <strong style="flex:1">${escapeHtml(youDid)} ${formatAmount(row.principal)}</strong>
+        <span class="badge ${outcome}">${escapeHtml(outcome)}</span>
       </div>
-      <div class="muted" style="font-size:13px">${escapeHtml(summary)}</div>
-      <div class="kv" style="margin-top:6px;font-size:12px">
-        <div><span class="k">block</span><span class="v">${ev.chain?.blockHeight ?? "?"} · ${escapeHtml(ts)} UTC</span></div>
-        <div><span class="k">tx</span><span class="v"><a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(txid)}" target="_blank">${escapeHtml(txid.slice(0,18))}…</a></span></div>
+      <div class="kv" style="font-size:13px">
+        <div><span class="k">borrower</span><span class="v"><span class="party-name" data-iaddr="${escapeHtml(borrowerIa || '')}">${escapeHtml((borrowerIa || '?').slice(0, 16))}…</span></span></div>
+        <div><span class="k">lender</span><span class="v"><span class="party-name" data-iaddr="${escapeHtml(lenderIa || '')}">${escapeHtml((lenderIa || '?').slice(0, 16))}…</span></span></div>
+        <div><span class="k">principal</span><span class="v">${formatAmount(row.principal)}</span></div>
+        <div><span class="k">repay</span><span class="v">${formatAmount(row.repay)}</span></div>
+        <div><span class="k">collateral</span><span class="v">${formatAmount(row.collateral)}</span></div>
+        <div><span class="k">originated</span><span class="v originated-ts muted">looking up…</span></div>
+        <div><span class="k">${outcome === 'repaid' ? 'repaid' : 'settled'}</span><span class="v settled-ts muted">${row.tx_repay_txid ? 'looking up…' : '—'}</span></div>
+        <div><span class="k">loan_id</span><span class="v"><a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(row.loan_id || '')}" target="_blank"><code>${escapeHtml((row.loan_id || '').slice(0, 20))}…</code></a></span></div>
       </div>
     </div>
   `;
 }
 
-document.getElementById("activity-refresh").onclick = async () => {
-  cachedSpendableIds = []; pickerByR = new Map();
-  await populateActingPicker();
-  loadActivity();
-};
+// Look up tx confirmation blocks via local daemon to fill in the
+// "originated" and "repaid"/"settled" rows. RPC, not explorer API.
+const _txTimeCache = new Map();
+const _identityNameCache = new Map();
+async function enrichHistoryRows() {
+  const cards = document.querySelectorAll('#market-list .mp-row[data-loan-id]');
+  for (const card of cards) {
+    const loanId = card.dataset.loanId;
+    const txRepay = card.dataset.txRepay;
+
+    const fmtBlock = (tx) => {
+      if (!tx) return '(not confirmed yet)';
+      const t = tx.time ? new Date(tx.time * 1000).toISOString().slice(0, 16).replace('T', ' ') : '';
+      return `block ${tx.height ?? '?'}${t ? ` · ${t} UTC` : ''}`;
+    };
+    const lookup = async (txid) => {
+      if (!txid) return null;
+      if (_txTimeCache.has(txid)) return _txTimeCache.get(txid);
+      const p = rpc('getrawtransaction', [txid, 1]).catch(() => null);
+      _txTimeCache.set(txid, p);
+      return p;
+    };
+
+    if (loanId) {
+      const tx = await lookup(loanId);
+      const cell = card.querySelector('.originated-ts');
+      if (cell) { cell.classList.remove('muted'); cell.textContent = fmtBlock(tx); }
+    }
+    if (txRepay) {
+      const tx = await lookup(txRepay);
+      const cell = card.querySelector('.settled-ts');
+      if (cell) { cell.classList.remove('muted'); cell.textContent = fmtBlock(tx); }
+    }
+
+    // Resolve borrower/lender iaddrs to fully-qualified names.
+    for (const span of card.querySelectorAll('.party-name')) {
+      const ia = span.dataset.iaddr;
+      if (!ia) continue;
+      let p = _identityNameCache.get(ia);
+      if (!p) {
+        p = rpc('getidentity', [ia]).then((info) => info?.identity?.fullyqualifiedname || info?.identity?.name).catch(() => null);
+        _identityNameCache.set(ia, p);
+      }
+      const name = await p;
+      if (name) span.textContent = name;
+    }
+  }
+}
+
+const _activityRefreshBtn = document.getElementById("activity-refresh");
+if (_activityRefreshBtn) {
+  _activityRefreshBtn.onclick = async () => {
+    cachedSpendableIds = []; pickerByR = new Map();
+    await populateActingPicker();
+    loadMarket();
+  };
+}
 
 // ---------- init ----------
 
 refreshStatus();
 setInterval(refreshStatus, 15000);
+
+// ── Auto-confirm watcher ──────────────────────────────────────────
+// Periodically scan: for each local identity, find loan.request entries
+// with auto_accept=true. For each, look for a corresponding loan.match
+// addressed to that identity. If found and verifyMatchSafety passes,
+// auto-fire the accept-v2 click handler (programmatically — same code
+// path as the manual button so all checks + side effects happen).
+//
+// Runs every 30s. Cheap when no auto_accept requests exist (one local
+// getidentity per local id). Safe to fire only once per match (we
+// track loan.status already on chain — match with existing loan.status
+// is excluded by verifyMatchSafety's vault input check).
+const _autoAcceptInFlight = new Set();
+async function autoAcceptWatcher() {
+  try {
+    const myIaddrs = await inScopeIaddrs();
+    if (myIaddrs.length === 0) return;
+    const VDXF_LOAN_REQUEST = "iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28";
+    const VDXF_LOAN_MATCH   = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
+    const VDXF_LOAN_STATUS  = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
+
+    for (const ia of myIaddrs) {
+      const info = await rpc("getidentity", [ia, -1]).catch(() => null);
+      const cm = info?.identity?.contentmultimap || {};
+
+      // Existing loan.status entries on this identity — skip auto-accept
+      // for any loan we've already opened.
+      const acceptedLoanIds = new Set();
+      const acceptedRequestTxids = new Set();
+      for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!hex) continue;
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j?.loan_id) acceptedLoanIds.add(j.loan_id);
+          if (j?.request_txid) acceptedRequestTxids.add(j.request_txid);
+        } catch {}
+      }
+
+      // Find auto_accept requests
+      const autoRequests = [];
+      for (const e of (cm[VDXF_LOAN_REQUEST] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!hex) continue;
+        try {
+          const json = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (!json?.auto_accept || !json?.target_lender_iaddr) continue;
+          autoRequests.push(json);
+        } catch {}
+      }
+      if (autoRequests.length === 0) continue;
+
+      // For each auto request, look up the lender's loan.match entries
+      // and find one whose request.iaddr matches us.
+      for (const req of autoRequests) {
+        const lenderIaddr = req.target_lender_iaddr;
+        const lenderInfo = await rpc("getidentity", [lenderIaddr, -1]).catch(() => null);
+        const lcm = lenderInfo?.identity?.contentmultimap || {};
+        for (const e of (lcm[VDXF_LOAN_MATCH] || [])) {
+          const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+          if (!hex) continue;
+          try {
+            const match = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+            // Our match? Only matches whose request.iaddr is us, and
+            // not yet accepted.
+            if (match.request?.iaddr !== ia) continue;
+            const txAtxid = match.tx_a_txid;
+            if (!txAtxid) continue;
+            if (acceptedLoanIds.has(txAtxid)) continue;
+            if (_autoAcceptInFlight.has(txAtxid)) continue;
+
+            // Found a candidate — verify
+            const errors = await verifyMatchSafety(match, req, ia);
+            if (errors.length > 0) {
+              console.warn(`[auto-accept] match for ${ia.slice(0,12)} failed verification:`, errors);
+              continue; // Don't auto-cancel; user can manually review in Inbox
+            }
+
+            // Verification passed — auto-fire the accept-v2 flow. We do
+            // it by setting up the same row state the manual handler
+            // uses, then dispatching a synthetic click on its Accept
+            // button. That keeps the entire flow on one code path.
+            _autoAcceptInFlight.add(txAtxid);
+            console.log(`[auto-accept] match for ${ia.slice(0,12)} verified, broadcasting Tx-A…`);
+            await loadMarket();  // Make sure the row exists in DOM
+            const matchKey = `match-${match.match_iaddr || lenderIaddr}-${match.posted_tx || ""}`;
+            const rowEl = document.querySelector(`.mp-row[data-match-key="${matchKey}"]`);
+            const btn = rowEl?.querySelector('[data-mp-row-act="accept-v2"]');
+            if (btn) {
+              btn.click();
+            } else {
+              console.warn(`[auto-accept] couldn't find Accept button for match ${matchKey}`);
+              _autoAcceptInFlight.delete(txAtxid);
+            }
+          } catch (e) {
+            console.warn(`[auto-accept] match parse error:`, e);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[auto-accept] watcher error:", e);
+  }
+}
+setInterval(autoAcceptWatcher, 30000);
+// Also fire shortly after page load so users don't wait 30s on first run.
+setTimeout(autoAcceptWatcher, 5000);
 // Critical: populate the picker before firing tab loaders, so they all see
 // the same scope. Otherwise loadLoans/loadActivity see "all" and fan out
 // across every spendable ID, then a later render with the actual selection
 // clobbers them.
 populateActingPicker().then(() => {
   loadMarket();
-  loadLoans();
-  loadActivity();
 });

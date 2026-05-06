@@ -73,12 +73,56 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_rpc()
         self._send_json(404, {"error": "not found"})
 
+    # CSRF defense: require a custom header on /rpc. Cross-origin requests
+    # carrying a non-CORS-safelisted header trigger a preflight that the
+    # server doesn't answer, so the browser blocks the actual request.
+    # Same-origin (the GUI itself) sets the header, so it goes through.
+    CSRF_HEADER = "X-Requested-By"
+    CSRF_VALUE = "vlocal"
+
+    # Method allowlist for /rpc. Strict subset of what the GUI actually
+    # uses — anything else (dumpprivkey, walletpassphrase, sendtoaddress,
+    # encryptwallet, ...) is rejected at the proxy.
+    ALLOWED_RPC = {
+        "getinfo", "getblockcount", "getbestblockhash", "getblockheader",
+        "getrawmempool", "getrawtransaction", "decoderawtransaction",
+        "createrawtransaction", "signrawtransaction", "sendrawtransaction",
+        "getaddressbalance", "getaddressutxos", "getaddressmempool",
+        "getaddresstxids",
+        "listidentities", "getidentity", "getcurrency",
+        "addmultisigaddress", "createmultisig", "validateaddress",
+        "sendcurrency", "z_getoperationresult", "z_getoperationstatus",
+        "updateidentity", "signmessage",
+    }
+
+    def _security_headers(self):
+        # Strict CSP: no inline scripts, no eval, no third-party scripts.
+        # connect-src allows the proxy itself + the public explorer.
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' https://scan.verus.cx; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Frame-Options", "DENY")
+
     def _serve_static(self, path):
         if not re.match(r"^/[\w\-./]+$", path) or ".." in path:
             self._send_json(400, {"error": "bad path"})
             return
         target = (STATIC_DIR / path.lstrip("/")).resolve()
-        if not str(target).startswith(str(STATIC_DIR)) or not target.is_file():
+        try:
+            target.relative_to(STATIC_DIR)
+        except ValueError:
+            self._send_json(404, {"error": "not found"})
+            return
+        if not target.is_file():
             self._send_json(404, {"error": "not found"})
             return
         ext = target.suffix.lower()
@@ -93,15 +137,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self._security_headers()
         self.end_headers()
         self.wfile.write(data)
 
     def _handle_rpc(self):
+        # CSRF guard — must be set by same-origin JS in main.js.
+        if self.headers.get(self.CSRF_HEADER) != self.CSRF_VALUE:
+            return self._send_json(403, {"error": "missing csrf header"})
+
         body = self._read_body()
         try:
-            json.loads(body)
+            parsed = json.loads(body)
         except Exception:
             return self._send_json(400, {"error": "invalid json"})
+
+        method = parsed.get("method") if isinstance(parsed, dict) else None
+        if method not in self.ALLOWED_RPC:
+            return self._send_json(403, {"error": f"rpc method not allowed: {method!r}"})
 
         cfg = self.rpc_cfg
         url = f"http://{cfg['rpchost']}:{cfg['rpcport']}/"

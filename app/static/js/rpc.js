@@ -11,7 +11,10 @@ export async function rpc(method, params = []) {
   };
   const res = await fetch("/rpc", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // X-Requested-By is the CSRF guard — the server rejects /rpc without it.
+    // Browsers preflight requests with non-safelisted headers, blocking
+    // cross-origin POST attempts from a hostile page.
+    headers: { "Content-Type": "application/json", "X-Requested-By": "vlocal" },
     body: JSON.stringify(body),
   });
   const text = await res.text();

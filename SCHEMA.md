@@ -209,10 +209,16 @@ Posted by both parties to their own identities after Tx-A confirms.
 The pair of entries (one per role) makes the loan publicly visible
 and correlatable. `loan_id` is the Tx-A txid (shared identifier).
 
+`request_txid` (v3+) is the txid of the borrower's `loan.request` post.
+It propagates from the request through `loan.match.request.txid` into
+the status entry — letting any consumer join all four lifecycle entries
+(request, match, status, history) by a single key regardless of stage.
+
 ```json
 {
-  "version": 1,
+  "version": 3,
   "loan_id":          "5e386061…cda4bd",
+  "request_txid":     "65a578f6…eaa93",
   "role":             "lender" | "borrower",
   "counterparty":     "i7A9…wg" | "iFmi…goy",
   "vault_address":    "b...",
@@ -236,9 +242,14 @@ indexers can derive outcome.
 Both parties write at settlement. Truth is the on-chain settlement tx;
 this is just an indexable summary for reputation.
 
+`request_txid` (v2+) is propagated from `loan.status.request_txid` so
+the history entry joins to the same loan via a single key.
+
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "loan_id": "...",
+  "request_txid": "65a578f6…eaa93",
   "vault_address": "b...",
   "role": "lender" | "borrower",
   "counterparty_id": "alice.foo@",
