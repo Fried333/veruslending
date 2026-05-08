@@ -1344,7 +1344,9 @@ async function loadMarket() {
       queueMicrotask(() => {
         // Auto-fund: pending requests directed at acting as lender.
         el.querySelectorAll('.mp-row[data-request-key]').forEach((rowEl) => {
-          const r = requestByKey.get(rowEl.dataset.requestKey);
+          const k = rowEl.dataset.requestKey;
+          if (_dismissedAutoLoad.has(k)) return;   // user clicked Cancel — don't re-open
+          const r = requestByKey.get(k);
           if (!r) return;
           if (r.target_lender_iaddr !== acting) return;
           if (r.iaddr === acting) return;
@@ -1360,6 +1362,7 @@ async function loadMarket() {
         // auto_accept=true was set on the request).
         el.querySelectorAll('.mp-row[data-match-key]').forEach((rowEl) => {
           const k = rowEl.dataset.matchKey;
+          if (_dismissedAutoLoad.has(k)) return;   // user clicked Cancel — don't re-open
           const r = matchByKey.get(k);
           if (!r) return;
           if (!r.request?.iaddr || r.request.iaddr !== acting) return;
@@ -1944,6 +1947,12 @@ const matchByKey = new Map();
 // Survives loadMarket re-renders so the Accept handler always sees terms
 // resolved by a prior enrichMatchRowTerms call.
 const matchResolvedRequest = new Map();
+// Rows the user explicitly dismissed (Cancel button on post-match or
+// accept panels). loadMarket's auto-loader skips these so the panel
+// doesn't immediately re-open after a Cancel click. Manual click on the
+// outer Fund / Accept button bypasses the set so the user can reopen.
+// Per-tab session only — cleared on reload.
+const _dismissedAutoLoad = new Set();
 
 async function renderCommsTab(el, acting, myToken) {
   // Communications via VerusID privateaddress (sapling z-memos).
@@ -2435,6 +2444,9 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       panel.innerHTML = "";
       delete panel.dataset.opActive;
     }
+    // Mark this match as dismissed — otherwise the next loadMarket would
+    // re-fire its auto-loader and re-open the panel immediately.
+    if (row.dataset.matchKey) _dismissedAutoLoad.add(row.dataset.matchKey);
     return;
   }
 
@@ -2445,6 +2457,9 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       panel.innerHTML = "";
       delete panel.dataset.opActive;
     }
+    // Mark this request as dismissed — otherwise the next loadMarket would
+    // re-fire its auto-loader and re-open the Fund panel immediately.
+    if (row.dataset.requestKey) _dismissedAutoLoad.add(row.dataset.requestKey);
     return;
   }
 
