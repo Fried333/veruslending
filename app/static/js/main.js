@@ -4535,7 +4535,13 @@ async function enrichActiveLoanBalances() {
           .map((entry) => typeof entry === "string" ? entry : (entry?.serializedhex || entry?.message || ""))
           .filter(Boolean);
       }
-      newCm[VDXF_LOAN_HISTORY] = [...(newCm[VDXF_LOAN_HISTORY] || []), historyHex];
+      // Always overwrite to size 1 — the live multimap holds the most-recent
+      // settlement event as a public beacon. Older entries persist forever in
+      // prior identity revisions (getidentityhistory) and the local cache
+      // (~/.verus_contract_gui/history_cache.json), so reputation queries
+      // still return the full history. Keeps the per-key blob under Verus's
+      // script-element cap (TESTING.md §37) regardless of trade volume.
+      newCm[VDXF_LOAN_HISTORY] = [historyHex];
       // Flip the loan.status entry to inactive so it stops showing up.
       const updatedStatus = { ...status, active: false, repaid_tx: repayBroadcastTxid };
       newCm[VDXF_LOAN_STATUS] = (newCm[VDXF_LOAN_STATUS] || []).map((hex) => {
@@ -5411,6 +5417,220 @@ async function autoAcceptWatcher() {
 setInterval(autoAcceptWatcher, 30000);
 // Also fire shortly after page load so users don't wait 30s on first run.
 setTimeout(autoAcceptWatcher, 5000);
+
+// ── Lender-side history attestation watcher ────────────────────────
+// Settlement is symmetric — both parties should write loan.history. The
+// borrower writes at repay-click time (colocated with their broadcast).
+// The lender has no click event to hang it on, so we poll: detect when a
+// match's vault has been spent (Tx-Repay landed), then attest from what
+// we directly observed (our R-address received the repayment).
+//
+// Idempotence: 3-tier check before any write
+//   1. local cache attestedLoanIds (fast skip)
+//   2. live loan.history multimap (size-1 latest)
+//   3. cold-start scan of getidentityhistory (only if cache empty)
+
+// Cache schema extension: { attestedLoanIds: Set<loan_id> } per iaddr.
+// Persisted via /history-cache endpoint alongside the existing rows.
+const _attestedLoanIds = new Map();   // iaddr → Set<loan_id>
+let _attestationsLoaded = false;
+
+async function loadAttestations() {
+  if (_attestationsLoaded) return;
+  try {
+    const resp = await fetch("/history-cache");
+    const cache = await resp.json();
+    const per = cache?.perIaddr || {};
+    for (const [ia, v] of Object.entries(per)) {
+      if (Array.isArray(v?.attestedLoanIds)) {
+        _attestedLoanIds.set(ia, new Set(v.attestedLoanIds));
+      }
+    }
+  } catch {}
+  _attestationsLoaded = true;
+}
+
+async function persistAttestation(iaddr, loanId) {
+  let s = _attestedLoanIds.get(iaddr);
+  if (!s) { s = new Set(); _attestedLoanIds.set(iaddr, s); }
+  s.add(loanId);
+  // Read-modify-write the cache file. Concurrent writers will race on this
+  // briefly but the worst case is one missed write per race; the watcher
+  // re-attempts next cycle and the live-multimap idempotence check catches it.
+  try {
+    const cur = await fetch("/history-cache").then((r) => r.json()).catch(() => ({}));
+    const per = cur?.perIaddr || {};
+    if (!per[iaddr]) per[iaddr] = { rows: [] };
+    per[iaddr].attestedLoanIds = Array.from(s);
+    cur.perIaddr = per;
+    cur.version = cur.version || 1;
+    await fetch("/history-cache", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Requested-By": "vlocal" },
+      body: JSON.stringify(cur),
+    });
+  } catch (e) {
+    console.warn("[lender-history] persist failed:", e?.message);
+  }
+}
+
+// Build + post a loan.history entry on `iaddr`'s identity (always-1 overwrite).
+// Returns the txid of the updateidentity, or throws.
+async function postHistoryEntry(iaddr, payload) {
+  const idInfo = await rpc("getidentity", [iaddr, -1]);
+  const ident = idInfo?.identity;
+  if (!ident) throw new Error(`getidentity returned no identity for ${iaddr}`);
+  const cm = ident.contentmultimap || {};
+  const newCm = {};
+  for (const [k, arr] of Object.entries(cm)) {
+    newCm[k] = (Array.isArray(arr) ? arr : [arr])
+      .map((e) => typeof e === "string" ? e : (e?.serializedhex || e?.message || ""))
+      .filter(Boolean);
+  }
+  const hex = Array.from(new TextEncoder().encode(JSON.stringify(payload)))
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  newCm[VDXF_LOAN_HISTORY] = [hex];   // always-1 overwrite
+  return await rpc("updateidentity", [{
+    name: ident.name,
+    parent: ident.parent || "",
+    contentmultimap: newCm,
+  }]);
+}
+
+// Has `iaddr` already attested loan_id? Check live multimap as a chain-side
+// idempotence guard for cases where the cache was wiped.
+async function chainHasAttestation(iaddr, loanId) {
+  try {
+    const idInfo = await rpc("getidentity", [iaddr, -1]);
+    const entries = idInfo?.identity?.contentmultimap?.[VDXF_LOAN_HISTORY] || [];
+    for (const e of entries) {
+      const h = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+      if (!h) continue;
+      try {
+        const j = JSON.parse(new TextDecoder().decode(_hexToBytes(h)));
+        if (j?.loan_id === loanId) return true;
+      } catch {}
+    }
+  } catch {}
+  return false;
+}
+
+// Find the tx that spent `tx_a_txid:vault_vout` from the vault address.
+// Returns null if unspent. Returns { txid, blockheight, type } if spent.
+async function findVaultSpendingTx(vault_address, tx_a_txid) {
+  // Walk the vault's tx history. getaddresstxids returns chronological order.
+  let txids;
+  try {
+    txids = await rpc("getaddresstxids", [{ addresses: [vault_address] }]);
+  } catch { return null; }
+  // Tx-A creates the vault output; Tx-Repay/Tx-B/Tx-C spend it. Find any tx
+  // (other than tx_a itself) that references tx_a_txid as an input.
+  for (const t of (txids || [])) {
+    if (t === tx_a_txid) continue;
+    let raw;
+    try { raw = await rpc("getrawtransaction", [t, 1]); } catch { continue; }
+    const inputsFromTxA = (raw?.vin || []).filter((vin) => vin.txid === tx_a_txid);
+    if (inputsFromTxA.length === 0) continue;
+    return { txid: t, blockheight: raw.height ?? raw.blockheight ?? null, raw };
+  }
+  return null;
+}
+
+// Classify outcome of a spending tx by its vout structure. Heuristic — refined
+// over time as we see more shapes:
+//   - One output to lender's R w/ amount ≈ repay → repaid (Tx-Repay)
+//   - One output to lender's R w/ amount ≈ collateral → defaulted (Tx-B)
+//   - Cooperative drain, complex structure → cancelled (Tx-C / manual)
+function classifyOutcome(spendingTx, match) {
+  const vouts = spendingTx?.vout || [];
+  const lenderR = match.lender_address;
+  const repayAmt = parseFloat(match.request?.repay?.amount ?? 0);
+  const collatAmt = parseFloat(match.request?.collateral?.amount ?? 0);
+
+  for (const v of vouts) {
+    const addrs = v?.scriptPubKey?.addresses || [];
+    if (!addrs.includes(lenderR)) continue;
+    const valNative = parseFloat(v.value || 0);
+    const valCcy = (() => {
+      const cv = v?.scriptPubKey?.reservetransfer || v?.valueSat || null;
+      // Verus cross-currency outputs may carry currencyvalues — best-effort
+      const cvs = v?.currencyvalues || {};
+      for (const amt of Object.values(cvs)) return parseFloat(amt);
+      return valNative;
+    })();
+    if (Math.abs(valCcy - repayAmt) < 0.01) return "repaid";
+    if (Math.abs(valCcy - collatAmt) < 0.01) return "defaulted";
+  }
+  return "unknown";
+}
+
+async function lenderHistoryWatcher() {
+  await loadAttestations();
+  try {
+    const myIaddrs = await inScopeIaddrs();
+    if (myIaddrs.length === 0) return;
+    for (const ia of myIaddrs) {
+      const info = await rpc("getidentity", [ia, -1]).catch(() => null);
+      const cm = info?.identity?.contentmultimap || {};
+      const myMatches = (cm[VDXF_LOAN_MATCH] || []).map((e) => {
+        const h = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!h) return null;
+        try { return JSON.parse(new TextDecoder().decode(_hexToBytes(h))); } catch { return null; }
+      }).filter(Boolean);
+
+      for (const match of myMatches) {
+        const loanId = match.tx_a_txid;
+        if (!loanId) continue;
+        // Tier 1: local cache
+        if (_attestedLoanIds.get(ia)?.has(loanId)) continue;
+        // Tier 2: live multimap (cheap)
+        if (await chainHasAttestation(ia, loanId)) {
+          // Backfill the cache so we don't pay the RPC next cycle.
+          await persistAttestation(ia, loanId);
+          continue;
+        }
+        // Detect settlement
+        const spent = await findVaultSpendingTx(match.vault_address, loanId);
+        if (!spent) continue;
+        // Confirmation gate: don't attest mempool-only spends
+        const confs = spent.raw?.confirmations ?? 0;
+        if (confs < 1) continue;
+        const outcome = classifyOutcome(spent.raw, match);
+        if (outcome === "unknown") {
+          console.warn(`[lender-history] couldn't classify ${spent.txid} for loan ${loanId.slice(0,12)} — skipping`);
+          continue;
+        }
+        const payload = {
+          version: 3,
+          role: "lender",
+          loan_id: loanId,
+          request_txid: match.request?.txid ?? null,
+          outcome,                                  // repaid | defaulted | cancelled
+          [outcome === "repaid" ? "tx_repay_txid" : "outcome_tx"]: spent.txid,
+          settled_at_block: spent.blockheight,
+          principal: match.request?.principal,
+          collateral: match.request?.collateral,
+          repay: match.request?.repay,
+          term_days: match.request?.term_days ?? null,
+          maturity_block: match.maturity_block ?? null,
+          counterparty_iaddr: match.request?.iaddr,
+        };
+        try {
+          const txid = await postHistoryEntry(ia, payload);
+          await persistAttestation(ia, loanId);
+          console.log(`[lender-history] attested ${outcome} for ${loanId.slice(0,12)} on ${ia.slice(0,12)} (tx ${txid.slice(0,12)})`);
+        } catch (e) {
+          console.warn(`[lender-history] post failed for ${loanId.slice(0,12)}:`, e?.message);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[lender-history] watcher error:", e?.message);
+  }
+}
+setInterval(lenderHistoryWatcher, 30000);
+setTimeout(lenderHistoryWatcher, 8000);
+
 // Critical: populate the picker before firing tab loaders, so they all see
 // the same scope. Otherwise loadLoans/loadActivity see "all" and fan out
 // across every spendable ID, then a later render with the actual selection
