@@ -243,30 +243,27 @@ Both parties write at settlement. Truth is the on-chain settlement tx;
 this is just an indexable summary for reputation.
 
 **Retention.** Verus enforces a per-stack-element cap on `updateidentity`
-payloads (see TESTING.md §37). With each entry ~300 bytes raw / ~600 chars
-hex, the per-key blob hits the cap once an identity accumulates roughly
-5–6 entries in a single `loan.history` array.
+payloads (see TESTING.md §37): the per-VDXF-key blob in the *current*
+multimap can hold roughly 5–6 entries before the daemon rejects the
+update with `bad-txns-script-element-too-large`.
 
-**Recommended retention (digest pattern):**
+This only bounds the **live** multimap. Every prior identity revision
+is preserved on chain (via `getidentityhistory`), the explorer's
+`/identity/events?type=loan.history&history=true` returns the full
+union across revisions, and the GUI persists a local cache at
+`~/.verus_contract_gui/history_cache.json` that holds every historical
+row. So full history is recoverable from at least three places — the
+chain itself, the explorer index, and the local cache.
 
-Keep the **3 most recent verbatim entries** plus **one rolling digest entry** that summarizes everything older. The digest stays under 300 bytes regardless of how many loans it represents:
+- **Writers** trim the live `loan.history` array when posting a new
+  entry (keep the most recent N, drop older ones from the new revision).
+  Dropped entries persist forever in prior revisions; nothing is lost.
+- **Readers** read from the local cache (instant) or walk the daemon /
+  explorer to populate it. The GUI filters the cache by date for
+  display: default last 7 days, "Show all" expander removes the filter.
 
-```json
-{
-  "version": 2,
-  "kind": "digest",
-  "covered_loan_count": 47,
-  "outcome_counts": { "settled": 41, "defaulted": 4, "rescued": 2 },
-  "earliest_settled_block": 4032100,
-  "latest_settled_block":   4057200,
-  "total_principal_by_currency": { "VRSC": 235.5, "DAI.vETH": 410.0 },
-  "anchor_txids": ["...","...","..."]
-}
-```
-
-Reputation consumers who want full detail follow `anchor_txids` (a sample of original entries) and the identity's full transaction history; routine scoring uses just the digest + last 3 verbatim. Writer is responsible for re-aggregating the digest each time it rolls.
-
-Alternative (simpler but less proven): archive older entries to a sub-ID like `history.alice@` and keep only recent on the live ID.
+No digest, no archive sub-ID needed — the existing cache + chain history
+are sufficient.
 
 **Both parties must write.** Per the symmetry principle, both borrower and lender post their own `loan.history` entry at settlement (see SPEC §10). A counterparty's entry is not authoritative for your reputation. The current GUI implementation only writes on the borrower side at repay-time; the lender-side watcher is open work.
 
