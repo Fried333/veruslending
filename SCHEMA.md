@@ -245,10 +245,30 @@ this is just an indexable summary for reputation.
 **Retention.** Verus enforces a per-stack-element cap on `updateidentity`
 payloads (see TESTING.md §37). With each entry ~300 bytes raw / ~600 chars
 hex, the per-key blob hits the cap once an identity accumulates roughly
-5–6 entries in a single `loan.history` array. Writers must either
-periodically compact (drop oldest, or rewrite as a digest) or move
-older entries to a separate identity / off-chain store. A formal
-retention policy is open work; the current GUI does not compact.
+5–6 entries in a single `loan.history` array.
+
+**Recommended retention (digest pattern):**
+
+Keep the **3 most recent verbatim entries** plus **one rolling digest entry** that summarizes everything older. The digest stays under 300 bytes regardless of how many loans it represents:
+
+```json
+{
+  "version": 2,
+  "kind": "digest",
+  "covered_loan_count": 47,
+  "outcome_counts": { "settled": 41, "defaulted": 4, "rescued": 2 },
+  "earliest_settled_block": 4032100,
+  "latest_settled_block":   4057200,
+  "total_principal_by_currency": { "VRSC": 235.5, "DAI.vETH": 410.0 },
+  "anchor_txids": ["...","...","..."]
+}
+```
+
+Reputation consumers who want full detail follow `anchor_txids` (a sample of original entries) and the identity's full transaction history; routine scoring uses just the digest + last 3 verbatim. Writer is responsible for re-aggregating the digest each time it rolls.
+
+Alternative (simpler but less proven): archive older entries to a sub-ID like `history.alice@` and keep only recent on the live ID.
+
+**Both parties must write.** Per the symmetry principle, both borrower and lender post their own `loan.history` entry at settlement (see SPEC §10). A counterparty's entry is not authoritative for your reputation. The current GUI implementation only writes on the borrower side at repay-time; the lender-side watcher is open work.
 
 `request_txid` (v2+) is propagated from `loan.status.request_txid` so
 the history entry joins to the same loan via a single key.
