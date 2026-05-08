@@ -128,3 +128,24 @@ D3 is the spec-critical test — if SIGHASH_SINGLE\|ANYONECANPAY allows Bob to a
 1. Should the canonical Tx-B use `SIGHASH_ALL` (no broadcaster-pays-fee) or `SIGHASH_SINGLE|ANYONECANPAY`? D3 may decide this.
 2. What's the canonical Tx-C structure? nLockTime far in future (1 year?), output structure (back to borrower? both parties? split?), sighash discipline?
 3. For non-VRSC collateral, should the spec mandate a tiny "fee-budget" output in Tx-A so the broadcaster doesn't have to scrounge for VRSC at settlement time?
+4. **`loan.history` retention policy** (surfaced by §37 GUI e2e suite). Verus's per-stack-element cap rejects `updateidentity` once `loan.history` accumulates ~5–6 entries. Spec needs a policy: writer-side compaction? digest-of-older-entries? off-chain archive?
+
+---
+
+## GUI lifecycle scenarios (Playwright e2e)
+
+Separate from the chain-mechanics matrix above. These exercise the request/match/accept/repay/cancel UI flows end-to-end on mainnet, validated 2026-05-08.
+
+| # | Scenario | Validates |
+|---|----------|-----------|
+| 1 | happy path | request → match → auto-accept → repay → vault drained ✅ |
+| 2 | borrower cancels request | post → cancel → multimap purged ✅ |
+| 3 | lender cancels match | match → cancel → multimap purged ✅ |
+| 4 | manual accept (`auto_accept=false`) | borrower clicks Accept manually ✅ |
+| 5 | repay localStorage missing | recovers Tx-Repay from `loan.status.tx_repay_signed` ✅ |
+| 6 | repay double-recovery | falls through to lender's `match.tx_repay_partial` ✅ |
+| 7 | match safety probe | `verifyMatchSafety` window-exposed ✅ |
+| 8 | lender insufficient principal | UI rejects with no Confirm button ✅ |
+| 9 | borrower insufficient collateral | Preview disabled, validation message shown ✅ |
+
+Suite + reset semantics: see [`verus_contract_gui/test/`](https://github.com/Fried333/verus_contract_gui/tree/main/test) and TESTING.md §37.

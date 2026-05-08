@@ -242,6 +242,14 @@ indexers can derive outcome.
 Both parties write at settlement. Truth is the on-chain settlement tx;
 this is just an indexable summary for reputation.
 
+**Retention.** Verus enforces a per-stack-element cap on `updateidentity`
+payloads (see TESTING.md §37). With each entry ~300 bytes raw / ~600 chars
+hex, the per-key blob hits the cap once an identity accumulates roughly
+5–6 entries in a single `loan.history` array. Writers must either
+periodically compact (drop oldest, or rewrite as a digest) or move
+older entries to a separate identity / off-chain store. A formal
+retention policy is open work; the current GUI does not compact.
+
 `request_txid` (v2+) is propagated from `loan.status.request_txid` so
 the history entry joins to the same loan via a single key.
 

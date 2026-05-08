@@ -912,3 +912,39 @@ Three of four phases are pure stock CLI. One gap remains — the same gap as the
 - Death/inheritance scenarios (E1–E6) — primarily about wallet UX, not protocol mechanics
 - Non-VRSC collateral in practice (H1) — should work per the cross-currency results in §18-§21 but not directly tested with e.g. tBTC.vETH as collateral
 - D3 (broadcaster adds extra outputs to steal extra value) — argued safe by accounting (tx must balance, broadcaster's added inputs must fund their added outputs). Not directly tested.
+
+### 37. End-to-end GUI scenario suite (v3 protocol, Playwright on mainnet)
+
+A 9-scenario Playwright harness drives the borrower + lender GUIs end-to-end on Verus mainnet, exercising the full v3 protocol surface. The harness lives at [`verus_contract_gui/test/e2e_v3_scenarios.mjs`](https://github.com/Fried333/verus_contract_gui/blob/main/test/e2e_v3_scenarios.mjs) (mirror of `app/` in this repo).
+
+Setup: borrower GUI on `http://127.0.0.1:7777` with local daemon (controls `i7b7Tq8JYXX9iqS7FBevC6LaG3ioh8z3RM`); lender GUI on `:7778` reverse-tunneled to a remote daemon (controls `i7A9fa8c3xZnA3uLK3SLYa58cUipganewg`). Both wallets hold real funds; every scenario broadcasts.
+
+**Scenarios validated:**
+
+| # | Name | What it validates |
+|---|------|-------------------|
+| 1 | happy path | request → match → auto-accept (Tx-A broadcast) → repay (Tx-Repay) → vault drained |
+| 2 | borrower cancels request | post request → click Cancel → multimap purged + UTXO unlocked |
+| 3 | lender cancels match | request → match → click Cancel match → multimap purged |
+| 4 | manual accept | `auto_accept=false` → borrower clicks Accept → loan opens → repay |
+| 5 | repay with localStorage missing | repay handler recovers Tx-Repay from `loan.status.tx_repay_signed` on chain |
+| 6 | repay double recovery | localStorage AND `loan.status.tx_repay_signed` cleared → falls through to lender's `match.tx_repay_partial` and re-cosigns |
+| 7 | match safety probe | `verifyMatchSafety` is window-exposed for unit testing of corrupted match payloads |
+| 8 | lender insufficient principal | GUI shows insufficient warning, no Confirm button |
+| 9 | borrower insufficient collateral | Preview & sign disabled, validation message shown |
+
+Each scenario passed end-to-end on mainnet with real fees, real confirmations. Scenario 1 (happy path) typically completes in ~5–8 minutes; scenarios that wait for the explorer's `/contracts/loans` view (3–6) can take longer because that endpoint is confirmed-state-only.
+
+**Observations from running the suite that fed back into the spec / GUI:**
+
+1. **Multimap script-element size limit.** Verus enforces a per-stack-element cap on `updateidentity` payloads. Once `loan.history` accumulated ~5–6 entries (≈5.7 KB hex), the daemon rejected updates with `bad-txns-script-element-too-large`. Implication for the spec: **history must be trimmed**, either by the writer or by a periodic compaction transaction. The test harness drops history between scenarios for this reason. SCHEMA does not currently specify a retention policy.
+
+2. **Identity-update mempool serialization.** A second `updateidentity` on the same identity while the previous is unconfirmed gets rejected by the daemon. More subtly, the wallet's coin selection may pick a UTXO from the in-flight tx, producing `bad-txns-inputs-spent` even if the second update wouldn't conflict at the multimap level. The harness gates on `confirmed.txid === tip.txid` AND empty mempool deltas on the identity's funding R-address before issuing any update. A wallet that wants to enqueue rapid identity updates needs the same gate.
+
+3. **Address-index lag for repay-balance checks.** `getaddressbalance` is confirmed-only; right after Tx-A is broadcast the borrower's R-address shows the pre-Tx-A balance and the GUI's `have ≥ repay` check fails. The fix is to sum `getaddressutxos` (confirmed) **plus** `getaddressmempool` (mempool deltas) — what's now wired into `enrichActiveLoanBalances`. The pattern generalizes: any "do you have enough yet" check on a freshly-spent address must include mempool deltas.
+
+4. **Auto-accept watcher must open the panel before clicking Confirm.** The match row's outer "Accept this loan" button populates the `.accept-panel` async (after fetching request terms from the explorer / local daemon); only then does the inner `[data-mp-row-act="accept-v2"]` Confirm button render. The watcher previously raced ahead and queried for the inner button immediately after `loadMarket()`, never finding it. Fixed by clicking the outer Accept then polling for the inner Confirm.
+
+5. **Explorer's `posted_tx` references the latest identity revision, not the txid that introduced the entry.** The lender's `match.request.txid` was originally pinned to `posted_tx`. Each subsequent borrower-side identity update advances `posted_tx`, so a stale match referenced a revision that no longer carried the loan.request payload, breaking the borrower's accept flow. `matchKey` is now `match-{match_iaddr}-{request.iaddr}` instead.
+
+6. **Cooperative vault recovery is the right cleanup for half-finished tests.** When a scenario fails after Tx-A confirms but before Tx-Repay broadcasts, the vault holds the borrower's collateral. A pre-signed Tx-Repay would settle this, but if the test harness corrupted state (cleared loan.status, dropped match) the GUI can't reconstruct it. `recover_vault.sh` does the cooperative path: borrower sends repay to lender via `sendcurrency`, then both parties sign a fresh vault drain. Idempotent — exits 0 if the vault is empty.
