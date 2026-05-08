@@ -4,6 +4,23 @@ Small utilities for running the protocol's recipes from a Verus node. These are 
 
 ## Available helpers
 
+### `recover_vault.sh`
+
+Cooperative 2-of-2 vault drain used to recover from a half-finished settlement (e.g., a test that crashed after Tx-A confirmed but before Tx-Repay broadcast). Idempotent — exits 0 immediately if the vault is empty.
+
+```bash
+bash recover_vault.sh
+```
+
+Steps:
+1. Borrower → lender: 5.05 DAI repay via `sendcurrency`
+2. Both sign + broadcast a fresh vault drain (10 VRSC → borrower)
+3. Wait for confirmation
+
+Hardcoded for the test wallets (`bSe1gaBoZJqcBTMuTi6VYevXrRLz5XZ8Kj` vault, `RSiyiZ92…` borrower, `RKGN34Uh…` lender via SSH to `86.107.168.44:2400`). Adapt for other party pairs by editing the constants at the top of the script.
+
+Used by the GUI repo's e2e suite ([`verus_contract_gui/test/e2e_v3_scenarios.mjs`](https://github.com/Fried333/verus_contract_gui/blob/main/test/e2e_v3_scenarios.mjs)) — invoked via `bash /home/dev/veruslending/helpers/recover_vault.sh` (override path with `RECOVER_VAULT` env var).
+
 ### `extend_tx.py`
 
 Core utility. Takes a pre-signed tx hex and adds new inputs/outputs while preserving existing scriptSigs.

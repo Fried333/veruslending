@@ -209,6 +209,18 @@
     <text x="540" y="1169" class="tx-detail">• 0.5 VRSC → borrower (collateral returned)</text>
   </g>
 
+  <!-- Lender's symmetric history attestation (auto, no click) -->
+  <g>
+    <circle cx="1350" cy="1110" r="20" fill="#059669"/>
+    <text x="1350" y="1117" text-anchor="middle" class="step-num">4a'</text>
+    <rect x="940" y="1090" width="380" height="100" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="1"/>
+    <text x="960" y="1110" class="step-text-bold">Watcher detects Tx-Repay</text>
+    <text x="960" y="1127" class="small">Polls every 30s: vault UTXO spent + my R received repay</text>
+    <text x="960" y="1141" class="small">→ classify outcome from output structure</text>
+    <text x="960" y="1161" class="step-text-bold">Post loan.history (lender attestation)</text>
+    <text x="960" y="1178" class="small">role:lender, same loan_id — symmetric record</text>
+  </g>
+
   <!-- ═══════════════════════════════════ -->
   <!-- PHASE 4b: DEFAULT CLAIM -->
   <!-- ═══════════════════════════════════ -->
@@ -224,8 +236,8 @@
     <text x="960" y="1320" class="step-text-bold">Add fee input + sign + broadcast</text>
     <text x="960" y="1337" class="small">Chain rejects before nLockTime; accepts at maturity.</text>
     <text x="960" y="1351" class="small">Borrower never has to come online for this path.</text>
-    <text x="960" y="1371" class="step-text-bold">Lender claims entire vault</text>
-    <text x="960" y="1388" class="small">Vault drained → lender's R-address.</text>
+    <text x="960" y="1371" class="step-text-bold">Lender claims vault + posts loan.history</text>
+    <text x="960" y="1388" class="small">role:lender outcome:defaulted (same click as broadcast).</text>
   </g>
 
   <!-- Tx-B on chain -->
@@ -239,6 +251,19 @@
     <text x="525" y="1366" class="tx-detail">Outputs:</text>
     <text x="540" y="1380" class="tx-detail">• 0.5 VRSC → lender (sig-locked)</text>
     <text x="540" y="1394" class="tx-detail">• Tx-Repay becomes invalid (vault UTXO consumed)</text>
+  </g>
+
+  <!-- Borrower's symmetric default attestation (auto, no click) -->
+  <g>
+    <circle cx="50" cy="1300" r="20" fill="#2563eb"/>
+    <text x="50" y="1307" text-anchor="middle" class="step-num">4b'</text>
+    <rect x="80" y="1280" width="380" height="120" rx="6" fill="#eff6ff" stroke="#2563eb" stroke-width="1"/>
+    <text x="100" y="1300" class="step-text-bold">Watcher detects vault drained by Tx-B</text>
+    <text x="100" y="1317" class="small">Polls vault: spent by tx that's NOT my Tx-Repay</text>
+    <text x="100" y="1331" class="small">→ vault output went to lender = defaulted</text>
+    <text x="100" y="1351" class="step-text-bold">Post loan.history (borrower attestation)</text>
+    <text x="100" y="1368" class="small">role:borrower outcome:defaulted, same loan_id</text>
+    <text x="100" y="1388" class="small">— eventually-consistent record on both identities</text>
   </g>
 
   <!-- ═══════════════════════════════════ -->
