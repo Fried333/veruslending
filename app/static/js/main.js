@@ -47,6 +47,7 @@ const VDXF_LOAN_REQUEST  = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW"; // vcs::contrac
 const VDXF_LOAN_MATCH    = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt"; // vcs::contract.loan.match
 const VDXF_LOAN_STATUS   = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j"; // vcs::contract.loan.status
 const VDXF_LOAN_HISTORY  = "iBGuPDeeHHYpvKdM7VG2d7LR1Lct9itcpT"; // vcs::contract.loan.history
+const VDXF_LOAN_DECLINE  = "iBhQXJ21aqiH9kFvGqUrQy7MnKBdq1eyKc"; // vrsc::contract.loan.decline
 
 const VDXF_LOAN_REQUEST_LEGACY = "iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28";
 const VDXF_LOAN_MATCH_LEGACY   = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
@@ -66,6 +67,7 @@ const VDXF = {
   [VDXF_LOAN_MATCH]:                     { slug: "loan.match",    label: "Loan match" },
   [VDXF_LOAN_STATUS]:                    { slug: "loan.status",   label: "Loan active" },
   [VDXF_LOAN_HISTORY]:                   { slug: "loan.history",  label: "Loan settled" },
+  [VDXF_LOAN_DECLINE]:                   { slug: "loan.decline",  label: "Loan declined" },
   // Legacy (vrsc::contract.*) — read-only, kept so historical entries label
   // correctly in the UI.
   [VDXF_LOAN_REQUEST_LEGACY]:            { slug: "loan.request",  label: "Loan request (legacy)" },

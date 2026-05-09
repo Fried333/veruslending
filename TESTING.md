@@ -948,3 +948,31 @@ Each scenario passed end-to-end on mainnet with real fees, real confirmations. S
 5. **Explorer's `posted_tx` references the latest identity revision, not the txid that introduced the entry.** The lender's `match.request.txid` was originally pinned to `posted_tx`. Each subsequent borrower-side identity update advances `posted_tx`, so a stale match referenced a revision that no longer carried the loan.request payload, breaking the borrower's accept flow. `matchKey` is now `match-{match_iaddr}-{request.iaddr}` instead.
 
 6. **Cooperative vault recovery is the right cleanup for half-finished tests.** When a scenario fails after Tx-A confirms but before Tx-Repay broadcasts, the vault holds the borrower's collateral. A pre-signed Tx-Repay would settle this, but if the test harness corrupted state (cleared loan.status, dropped match) the GUI can't reconstruct it. `recover_vault.sh` does the cooperative path: borrower sends repay to lender via `sendcurrency`, then both parties sign a fresh vault drain. Idempotent — exits 0 if the vault is empty.
+
+### 38. Chain-only recovery (e2e scenario 12)
+
+Validates the audit-trail fallback when the live multimap has been wiped: the borrower's GUI walks `getidentityhistory` for prior `loan.match` revisions on the lender's identity, finds the last revision with `tx_repay_partial` matching the active `loan_id`, re-cosigns the borrower's vault-half from scratch, and broadcasts.
+
+**Setup:** open a fresh loan, then:
+- wipe lender's `loan.match` (entire VDXF key removed via `updateidentity`, other keys preserved)
+- strip `tx_repay_signed` from borrower's `loan.status` (keep the entry so the loan card still renders)
+- clear borrower's localStorage `vl_tx_repay_<loanId>`
+
+The tier 4 / tier 4.5 fallback in the repay handler (main.js:4305 + 4368) walks identity history. Validated end-to-end on mainnet — repay completes without any live-multimap copy of the partial.
+
+**Implication for SCHEMA `loan.template`:** the encrypted-self backup primitive is unnecessary. All settlement-path data (vault address, redeem script, partials) is recoverable from chain via past identity revisions. SCHEMA's "encrypted (self)" loan.template note can be relaxed or dropped.
+
+### 39. Replay safety across loans on a reused vault (e2e scenario 13)
+
+Vault P2SH is deterministic from `(borrower_pubkey, lender_pubkey)`, so the same address services every loan between the same pair. We tested whether old settlement txs from past loans can be replayed against fresh vault UTXOs.
+
+**Test:** walk borrower's `getidentityhistory` for a past `loan.history(outcome=repaid)` entry. Fetch the actual broadcast Tx-Repay raw hex via `getrawtransaction <tx_repay_txid>`. Try to rebroadcast against current chain.
+
+**Result:** rejected with **`tx-expiring-soon`** (`expiryheight is X but should be at least Y to avoid transaction expiring soon`). Verus's `expiryheight` field caps the reuse window to ~20 blocks — old Tx-Repays from days/weeks-ago loans can't be rebroadcast at all.
+
+**Two independent layers of replay protection:**
+
+1. **Verus `expiryheight`** (validated): every Tx-Repay carries an expiryheight set ~20 blocks ahead of broadcast time. After that height, the daemon refuses the tx outright. Replay window is small enough that even within-window replay needs the vault UTXO to still exist.
+2. **Spent-input commitment** (logical, not directly tested): even if expiryheight allowed it, the Tx-Repay's signature commits to a specific `(vault_txid, vault_vout)` via SIGHASH_SINGLE\|ANYONECANPAY. Once that UTXO is consumed by the original Tx-Repay, no other tx can spend it. Replacing the input with a fresh vault UTXO from a different Tx-A invalidates the signature.
+
+**Implication for SPEC:** vault P2SH reuse between the same parties is safe. No need for per-loan vault randomization (option C tweaked-key scheme reverted in `verus_contract_gui` commit `e329954` was overcautious). Determinism is fine.
