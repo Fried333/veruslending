@@ -976,3 +976,25 @@ Vault P2SH is deterministic from `(borrower_pubkey, lender_pubkey)`, so the same
 2. **Spent-input commitment** (logical, not directly tested): even if expiryheight allowed it, the Tx-Repay's signature commits to a specific `(vault_txid, vault_vout)` via SIGHASH_SINGLE\|ANYONECANPAY. Once that UTXO is consumed by the original Tx-Repay, no other tx can spend it. Replacing the input with a fresh vault UTXO from a different Tx-A invalidates the signature.
 
 **Implication for SPEC:** vault P2SH reuse between the same parties is safe. No need for per-loan vault randomization (option C tweaked-key scheme reverted in `verus_contract_gui` commit `e329954` was overcautious). Determinism is fine.
+
+### 40. Lender decline — public "polite no" via loan.decline
+
+Validates the marketplace UX flow where a lender publicly declines a borrower's request instead of silently ignoring it. Reserves VDXF id `iBhQXJ21aqiH9kFvGqUrQy7MnKBdq1eyKc` for `vrsc::contract.loan.decline`.
+
+**Test (e2e scenario 14):** borrower posts request with `auto_accept=false` and `target_lender_iaddr=lender`. Lender's GUI renders the Fund panel automatically. Lender clicks **Decline** instead of **Confirm**. Asserts:
+
+- Lender's identity gets a fresh `loan.decline` entry pointing at borrower's `request_txid`
+- All other VDXF keys on lender's identity (offers, etc.) preserved (read-modify-write)
+- Borrower's loan.request stays unchanged on chain (lender has no authority to write to borrower's identity)
+- Borrower-side decline watcher (30s poll on each `target_lender_iaddr` in borrower's active requests) finds the new entry
+- Borrower's GUI surfaces a yellow banner: *"Lender X declined your request — try another lender or adjust terms"*
+
+**Result:** passed in 73 seconds end-to-end on mainnet — well under one block of typical confirmation lag, indicating the new mempool-merge path in `fetchMarketBundle` (poll counterparties via `getidentity -1`) successfully bypassed the explorer's confirmed-only `/contracts/loans/requests` view.
+
+**Design notes:**
+
+- `loan.decline` is a **UX signal, not a cryptographic veto.** The borrower can still re-target a different lender or adjust terms; nothing about the chain prevents that. The banner is a courtesy nudge.
+- The borrower's request is not auto-cancelled on decline. Other lenders can still match it. Decline is per-lender, not protocol-level termination.
+- Same retention pattern as `loan.history` — live multimap holds the latest decline as a beacon; older entries persist in past identity revisions.
+
+**Implication for SCHEMA:** the existing `loan.template` "encrypted (self)" backup primitive (§37 marked as unused) can be formally deprecated. All settlement data is recoverable from past identity revisions (proven by §38 chain-only recovery scenario).

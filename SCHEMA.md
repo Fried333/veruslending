@@ -32,8 +32,9 @@ Singular `contract` matches Verus's own convention (`system`, `profile`,
 | `vrsc::contract.loan.match`     | `iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT` | lender's pre-signed funding offer for a specific request | public |
 | `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | active loan state (per party) | public |
 | `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | settled outcome attestation | public |
+| `vrsc::contract.loan.decline`   | `iBhQXJ21aqiH9kFvGqUrQy7MnKBdq1eyKc` | lender's "polite no" to a request | public |
 | `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | acceptance handshake (legacy, superseded by loan.match) | encrypted |
-| `vrsc::contract.loan.template`  | `i7HCaxjju3QRYmbC23g5QD2smMk4PqaXFq` | pre-signed tx backup | encrypted (self) |
+| `vrsc::contract.loan.template`  | `i7HCaxjju3QRYmbC23g5QD2smMk4PqaXFq` | pre-signed tx backup (deprecated — see TESTING §38, all data recoverable from past identity revisions) | unused |
 | `vrsc::contract.option.offer`   | `i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY` | option writer's terms | public |
 | `vrsc::contract.option.history` | `iEdahQZgGRhECPfHTvb1P8C7y5LVaqKvjt` | option outcome | public |
 | `vrsc::contract.option.status`  | `iK8rYBePsedzPGA1Hi9vnu6Q2KKegfKqcU` | active option state | public |
@@ -290,6 +291,27 @@ the history entry joins to the same loan via a single key.
   "outcome_block": ...
 }
 ```
+
+### `contract.loan.decline` — public
+
+Lender's public "polite no" to a specific borrower request. Lets the borrower's GUI surface a banner instead of leaving a request hanging while the lender silently moves on. Optional — lenders who prefer not to publish explicit declines can simply ignore requests, and the GUI will eventually time out the display.
+
+```json
+{
+  "version": 1,
+  "request_txid": "...",          // the borrower's loan.request.posted_tx
+  "borrower_iaddr": "i7b7Tq8...", // who's being declined (so multiple
+                                  //   readers each know "is this for me?")
+  "reason": null | "insufficient_balance" | "terms" | "passing",
+  "declined_at_block": <int>
+}
+```
+
+**Retention.** Same pattern as `loan.history`: writer always overwrites the live multimap entry to size 1 (latest decline), older declines persist in past identity revisions via `getidentityhistory`. Borrowers reading their decline cache it locally on first sighting (`vl_seen_declines` localStorage) so the banner doesn't re-fire even if the entry rotates out.
+
+**Posted by:** lender (on their own identity). Borrower has no authority to write here.
+
+**Read by:** borrower's GUI watcher (polls each `target_lender_iaddr` from the borrower's active requests every ~30s).
 
 ### `contract.loan.accept` — encrypted
 

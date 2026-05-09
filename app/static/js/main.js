@@ -1103,11 +1103,99 @@ async function fetchOneMarketTab(path) {
   }
 }
 async function fetchMarketBundle() {
-  return Promise.all([
+  const [reqRes, offRes, mchRes] = await Promise.all([
     fetchOneMarketTab("/contracts/loans/requests?pageSize=200"),
     fetchOneMarketTab("/contracts/loans/offers?pageSize=200"),
     fetchOneMarketTab("/contracts/loans/matches?pageSize=200"),
   ]);
+  // The explorer's /loans endpoints index confirmed state only — there's
+  // a 1-block lag between a request/match landing in mempool and showing
+  // up here. Cover the gap by polling each "interesting counterparty"
+  // identity with `getidentity -1` (mempool view) and merging any new
+  // match/request entries into the bundle.
+  //
+  // Interesting counterparties:
+  //   - target_lender_iaddr from MY requests (so I see their match before
+  //     it confirms)
+  //   - any iaddr that already shows up as match.match_iaddr in the
+  //     explorer's matches list (active interaction)
+  try {
+    const myIaddrs = await inScopeIaddrs().catch(() => []);
+    const mySet = new Set(myIaddrs);
+    const counterpartyIaddrs = new Set();
+    for (const r of (reqRes.results || [])) {
+      if (mySet.has(r.iaddr) && r.target_lender_iaddr && !mySet.has(r.target_lender_iaddr)) {
+        counterpartyIaddrs.add(r.target_lender_iaddr);
+      }
+    }
+    for (const m of (mchRes.results || [])) {
+      // If a match references one of my requests, its sender is a counterparty
+      // — but we already have that match. Add the inverse for completeness:
+      // matches I posted to a target borrower → poll that borrower for status.
+      if (mySet.has(m.match_iaddr) && m.request?.iaddr && !mySet.has(m.request.iaddr)) {
+        counterpartyIaddrs.add(m.request.iaddr);
+      }
+    }
+    const VDXF_LOAN_MATCH_LOCAL = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+    const VDXF_LOAN_REQUEST_LOCAL = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+    const seenMatchKeys = new Set((mchRes.results || []).map((m) =>
+      `${m.match_iaddr}|${m.tx_a_txid || m.request?.txid || ""}`));
+    const seenReqKeys = new Set((reqRes.results || []).map((r) =>
+      `${r.iaddr}|${r.posted_tx || ""}`));
+
+    await Promise.all(Array.from(counterpartyIaddrs).map(async (cpIa) => {
+      let info;
+      try { info = await rpc("getidentity", [cpIa, -1]); } catch { return; }
+      const cm = info?.identity?.contentmultimap || {};
+      const tipTxid = info?.txid;
+      const fqn = info?.identity?.fullyqualifiedname || info?.identity?.name;
+      // Pull mempool-fresh loan.match entries authored by this counterparty
+      for (const e of (cm[VDXF_LOAN_MATCH_LOCAL] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!hex) continue;
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          const key = `${cpIa}|${j.tx_a_txid || j.request?.txid || ""}`;
+          if (seenMatchKeys.has(key)) continue;
+          // Synthesize a row in the same shape as the explorer's typed view
+          // so render code doesn't need to special-case mempool entries.
+          mchRes.results = mchRes.results || [];
+          mchRes.results.push({
+            ...j,
+            match_iaddr: cpIa,
+            fullyQualifiedName: fqn,
+            name: info?.identity?.name,
+            posted_tx: tipTxid,
+            _mempool: true,    // tag so UI can show a "(mempool)" badge if it wants
+          });
+          seenMatchKeys.add(key);
+        } catch {}
+      }
+      // Also pull mempool-fresh loan.request entries authored by this counterparty
+      for (const e of (cm[VDXF_LOAN_REQUEST_LOCAL] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!hex) continue;
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          const key = `${cpIa}|${tipTxid || ""}`;
+          if (seenReqKeys.has(key)) continue;
+          reqRes.results = reqRes.results || [];
+          reqRes.results.push({
+            ...j,
+            iaddr: cpIa,
+            fullyQualifiedName: fqn,
+            name: info?.identity?.name,
+            posted_tx: tipTxid,
+            _mempool: true,
+          });
+          seenReqKeys.add(key);
+        } catch {}
+      }
+    }));
+  } catch (e) {
+    console.warn("[mempool-merge] failed:", e?.message);
+  }
+  return [reqRes, offRes, mchRes];
 }
 function invalidateMarketCache() {
   for (const slot of _marketEndpointCache.values()) {
@@ -2399,7 +2487,11 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
           ${candidates.length
             ? `<div style="margin-top:10px;font-size:12px;color:var(--muted)">Will split a fresh ${escapeHtml(principalCcy)} UTXO via sendcurrency, then post the match.</div>`
             : `<div style="margin-top:10px;color:var(--bad);font-size:12px">No ${escapeHtml(principalCcy)} balance at ${escapeHtml(lenderR)} large enough to fund ${formatAmount(r.principal)}.</div>`}
-          ${candidates.length ? `<div class="row" style="margin-top:10px;gap:8px"><button class="primary" data-mp-row-act="post-match-go" style="flex:0 0 auto">Confirm — build, sign &amp; broadcast</button><button class="ghost" data-mp-row-act="post-match-cancel" style="flex:0 0 auto">Cancel</button></div>` : ""}
+          ${candidates.length ? `<div class="row" style="margin-top:10px;gap:8px">
+              <button class="primary" data-mp-row-act="post-match-go" style="flex:0 0 auto">Confirm — build, sign &amp; broadcast</button>
+              <button class="ghost" data-mp-row-act="post-match-decline" style="flex:0 0 auto" title="Tell the borrower you're passing on this — writes a small loan.decline entry on your identity (≈0.0001 VRSC fee).">Decline</button>
+              <button class="ghost" data-mp-row-act="post-match-cancel" style="flex:0 0 auto" title="Just close this panel (no on-chain signal — you can come back later).">Dismiss</button>
+            </div>` : ""}
           <div class="post-match-result" style="margin-top:8px"></div>
         </div>
       `;
@@ -2462,6 +2554,42 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     // Mark this request as dismissed — otherwise the next loadMarket would
     // re-fire its auto-loader and re-open the Fund panel immediately.
     if (row.dataset.requestKey) _dismissedAutoLoad.add(row.dataset.requestKey);
+    return;
+  }
+
+  if (action === "post-match-decline") {
+    // Public "polite no" — write loan.decline on lender's identity so the
+    // borrower's GUI surfaces a banner. Borrower stays in marketplace; can
+    // re-target a different lender. Lender's other VDXF keys preserved.
+    const requestKey = row.dataset.requestKey;
+    const r = requestByKey.get(requestKey);
+    if (!r) return;
+    const acting = actingIaddr();
+    if (!acting || acting === "all") { alert("Set acting ID first"); return; }
+    if (!confirm(`Send a public decline for ${r.fullyQualifiedName || r.name + "@"}'s request?\n\nThis writes a small loan.decline entry on your identity (≈0.0001 VRSC fee). The borrower's GUI sees it and shows "Lender passed".\n\nIf you might reconsider, click Dismiss instead.`)) return;
+    btn.disabled = true; btn.textContent = "Posting decline…";
+    try {
+      const tip = await rpc("getblockcount");
+      const declinePayload = {
+        version: 1,
+        request_txid: r.posted_tx,
+        borrower_iaddr: r.iaddr,
+        reason: null,                       // optional human-readable hint; null = unspecified
+        declined_at_block: tip,
+      };
+      const txid = await postDeclineEntry(acting, declinePayload);
+      const panel = row.querySelector(".post-match-panel");
+      if (panel) {
+        panel.innerHTML = `<div class="muted" style="color:var(--ok)">✓ Declined. <a href="https://scan.verus.cx/vrsc/tx/${escapeHtml(txid)}" target="_blank"><code>${escapeHtml(txid.slice(0,16))}…</code></a></div>`;
+        delete panel.dataset.opActive;
+      }
+      if (row.dataset.requestKey) _dismissedAutoLoad.add(row.dataset.requestKey);
+      invalidateMarketCache();
+      setTimeout(() => loadMarket(), 1500);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "Decline";
+      alert(`Decline failed: ${e.message}`);
+    }
     return;
   }
 
@@ -5514,6 +5642,31 @@ async function postHistoryEntry(iaddr, payload) {
   }]);
 }
 
+// Build + post a loan.decline entry on the lender's identity. Same
+// always-1 overwrite pattern as postHistoryEntry (size-1 keeps under
+// the per-stack-element cap; readers find older declines by walking
+// getidentityhistory or via cached state). All other VDXF keys preserved.
+async function postDeclineEntry(iaddr, payload) {
+  const idInfo = await rpc("getidentity", [iaddr, -1]);
+  const ident = idInfo?.identity;
+  if (!ident) throw new Error(`getidentity returned no identity for ${iaddr}`);
+  const cm = ident.contentmultimap || {};
+  const newCm = {};
+  for (const [k, arr] of Object.entries(cm)) {
+    newCm[k] = (Array.isArray(arr) ? arr : [arr])
+      .map((e) => typeof e === "string" ? e : (e?.serializedhex || e?.message || ""))
+      .filter(Boolean);
+  }
+  const hex = Array.from(new TextEncoder().encode(JSON.stringify(payload)))
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  newCm[VDXF_LOAN_DECLINE] = [hex];
+  return await rpc("updateidentity", [{
+    name: ident.name,
+    parent: ident.parent || "",
+    contentmultimap: newCm,
+  }]);
+}
+
 // Has `iaddr` already attested loan_id? Check live multimap as a chain-side
 // idempotence guard for cases where the cache was wiped.
 async function chainHasAttestation(iaddr, loanId) {
@@ -5647,6 +5800,79 @@ async function lenderHistoryWatcher() {
 }
 setInterval(lenderHistoryWatcher, 30000);
 setTimeout(lenderHistoryWatcher, 8000);
+
+// ── Decline notifications watcher (borrower side) ─────────────────────
+// Polls each lender that the borrower has an open request directed at,
+// reads their loan.decline entries (live + via mempool), and surfaces a
+// notification for any decline pointing at one of OUR request_txids.
+// Stores seen declines in localStorage so the toast doesn't re-fire.
+const _seenDeclines = new Set();
+try {
+  const stored = JSON.parse(localStorage.getItem("vl_seen_declines") || "[]");
+  for (const k of stored) _seenDeclines.add(k);
+} catch {}
+
+async function loanDeclineWatcher() {
+  try {
+    const myIaddrs = await inScopeIaddrs();
+    if (myIaddrs.length === 0) return;
+    const mySet = new Set(myIaddrs);
+
+    // Collect target_lender_iaddrs from MY currently-active requests
+    const targetLenders = new Set();
+    for (const ia of myIaddrs) {
+      const info = await rpc("getidentity", [ia, -1]).catch(() => null);
+      const cm = info?.identity?.contentmultimap || {};
+      for (const e of (cm[VDXF_LOAN_REQUEST] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!hex) continue;
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j.target_lender_iaddr && !mySet.has(j.target_lender_iaddr)) {
+            targetLenders.add(j.target_lender_iaddr);
+          }
+        } catch {}
+      }
+    }
+    if (targetLenders.size === 0) return;
+
+    for (const lenderIa of targetLenders) {
+      const info = await rpc("getidentity", [lenderIa, -1]).catch(() => null);
+      const cm = info?.identity?.contentmultimap || {};
+      for (const e of (cm[VDXF_LOAN_DECLINE] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        if (!hex) continue;
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (!j.borrower_iaddr || !j.request_txid) continue;
+          if (!mySet.has(j.borrower_iaddr)) continue;     // not directed at one of mine
+          const key = `${lenderIa}|${j.request_txid}`;
+          if (_seenDeclines.has(key)) continue;
+
+          // Surface a banner — non-blocking notification at the top of the loans tab
+          const banner = document.createElement("div");
+          banner.className = "decline-banner";
+          banner.style.cssText = "background:#fff3cd;border:1px solid #ffc107;color:#664d03;padding:10px 12px;border-radius:6px;margin:8px 0;font-size:13px;display:flex;align-items:center;gap:8px";
+          const lenderName = info?.identity?.fullyqualifiedname || info?.identity?.name || lenderIa.slice(0,12) + "…";
+          banner.innerHTML = `<strong>Lender ${escapeHtml(lenderName)} declined your request</strong> — try another lender or adjust terms.${j.reason ? ` Reason: ${escapeHtml(j.reason)}` : ""} <button class="ghost" style="margin-left:auto" onclick="this.parentElement.remove()">Dismiss</button>`;
+          const tab = document.getElementById("market-list");
+          if (tab && !tab.querySelector(`.decline-banner[data-key="${key}"]`)) {
+            banner.dataset.key = key;
+            tab.prepend(banner);
+          }
+          _seenDeclines.add(key);
+          try {
+            localStorage.setItem("vl_seen_declines", JSON.stringify(Array.from(_seenDeclines)));
+          } catch {}
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn("[decline-watcher] error:", e?.message);
+  }
+}
+setInterval(loanDeclineWatcher, 30000);
+setTimeout(loanDeclineWatcher, 6000);
 
 // Critical: populate the picker before firing tab loaders, so they all see
 // the same scope. Otherwise loadLoans/loadActivity see "all" and fan out
