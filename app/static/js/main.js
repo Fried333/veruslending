@@ -1369,6 +1369,79 @@ async function loadMarket() {
         }
       }
     } catch {}
+    // Also seed from acting party's OWN loan.status entries (mempool-aware).
+    // The explorer's /loans/by-party is confirmed-state only; right after
+    // an auto-accept the loan.status is written but Tx-A hasn't confirmed
+    // yet, so explorer says state=pending and the match row would still
+    // surface in "Awaiting your action". Walking own multimap with -1
+    // catches the freshly-written status before confirmation.
+    for (const ia of partyAddrs) {
+      try {
+        const info = await rpc("getidentity", [ia, -1]);
+        const cm = info?.identity?.contentmultimap || {};
+        for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
+          const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+          if (!hex) continue;
+          try {
+            const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+            if (j.loan_id)       acceptedTxAtxids.add(j.loan_id);
+            if (j.request_txid)  acceptedRequestTxids.add(j.request_txid);
+          } catch {}
+        }
+        // Lender side: own loan.match → matchedRequestTxids
+        // Also: for each match, check the borrower's identity for loan.status
+        // referencing this match's tx_a_txid. If found and active, the match
+        // has been accepted on chain (Tx-A in mempool/confirmed) and should
+        // be deduped from the lender's pending list.
+        for (const e of (cm[VDXF_LOAN_MATCH] || [])) {
+          const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+          if (!hex) continue;
+          try {
+            const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+            if (j.request?.txid) matchedRequestTxids.add(j.request.txid);
+            // Mempool-aware "match accepted/settled" probe. Three signals
+            // mean this match is past pending and should be deduped:
+            //   1. borrower's loan.status with loan_id === match.tx_a_txid
+            //      (loan opened — Tx-A in mempool or confirmed)
+            //   2. borrower's loan.history with loan_id === match.tx_a_txid
+            //      and outcome in {repaid, defaulted, cancelled}
+            //      (loan settled — borrower's GUI cleaned up loan.status,
+            //       so signal #1 is gone, but history attests it happened)
+            //   3. Tx-A is on chain via gettransaction (catches pure-CLI
+            //      flows that didn't write a loan.status entry)
+            if (j.tx_a_txid && j.request?.iaddr) {
+              try {
+                const bi = await rpc("getidentity", [j.request.iaddr, -1]);
+                const bcm = bi?.identity?.contentmultimap || {};
+                let settled = false;
+                for (const be of (bcm[VDXF_LOAN_STATUS] || [])) {
+                  const bhex = typeof be === "string" ? be : (be?.serializedhex || be?.message || "");
+                  if (!bhex) continue;
+                  try {
+                    const bj = JSON.parse(new TextDecoder().decode(_hexToBytes(bhex)));
+                    if (bj.loan_id === j.tx_a_txid) { settled = true; break; }
+                  } catch {}
+                }
+                if (!settled) {
+                  for (const be of (bcm[VDXF_LOAN_HISTORY] || [])) {
+                    const bhex = typeof be === "string" ? be : (be?.serializedhex || be?.message || "");
+                    if (!bhex) continue;
+                    try {
+                      const bj = JSON.parse(new TextDecoder().decode(_hexToBytes(bhex)));
+                      if (bj.loan_id === j.tx_a_txid) { settled = true; break; }
+                    } catch {}
+                  }
+                }
+                if (settled) {
+                  acceptedTxAtxids.add(j.tx_a_txid);
+                  if (j.request?.txid) acceptedRequestTxids.add(j.request.txid);
+                }
+              } catch {}
+            }
+          } catch {}
+        }
+      } catch {}
+    }
     // If the acting lender already has an active loan.match for a given
     // borrower, suppress that borrower's pending request from "Awaiting
     // your action" — they've already committed; the request shouldn't
