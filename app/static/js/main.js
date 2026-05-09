@@ -2371,7 +2371,11 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     const principal = Math.min(offerMaxAmt, 5);                  // start small by default
     const collateralCcy = offerCols[0] || "VRSC";
     const collateral = +(principal * offerRatio).toFixed(8);
-    const repay = +(principal * (1 + offerRate * (offerTerm / 365))).toFixed(8);
+    // Rate is interpreted as a flat percentage for the term (not APR).
+    // Lender posting "1% over 30 days" means repay = principal × 1.01.
+    // Same lender posting "1% over 7 days" also means repay × 1.01 — the
+    // term doesn't pro-rate; the lender named their price for THIS duration.
+    const repay = +(principal * (1 + offerRate)).toFixed(8);
     await openMarketPostForm("request", {
       target_lender: lenderIa,
       target_lender_label: row.dataset.offerFqn || lenderIa,
