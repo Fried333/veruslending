@@ -1102,6 +1102,55 @@ async function fetchOneMarketTab(path) {
     slot.inflight = null;
   }
 }
+// Module-cached watch list: identityhistory walk is moderately expensive,
+// so we cache the counterparty set per scope-iaddr. Invalidated by
+// invalidateMarketCache(). The set holds all iaddrs we've ever
+// interacted with via loan.request.target_lender_iaddr,
+// loan.match.request.iaddr, or loan.status.match_iaddr (in current
+// state OR any past identity revision).
+const _counterpartyWatchCache = new Map();   // iaddr → Set<counterpartyIaddr>
+
+async function getCounterpartyWatchList(iaddr) {
+  if (_counterpartyWatchCache.has(iaddr)) return _counterpartyWatchCache.get(iaddr);
+  const seen = new Set();
+  try {
+    const hist = await rpc("getidentityhistory", [iaddr, 0, -1]);
+    const revs = (hist?.history || []);
+    for (const rev of revs) {
+      const cm = rev?.identity?.contentmultimap || {};
+      // From our requests: target_lender_iaddr
+      for (const e of (cm[VDXF_LOAN_REQUEST] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j.target_lender_iaddr) seen.add(j.target_lender_iaddr);
+        } catch {}
+      }
+      // From our matches: request.iaddr (the borrower we matched)
+      for (const e of (cm[VDXF_LOAN_MATCH] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j.request?.iaddr) seen.add(j.request.iaddr);
+        } catch {}
+      }
+      // From our status entries: match_iaddr (counterparty per loan)
+      for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
+        const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+        try {
+          const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+          if (j.match_iaddr) seen.add(j.match_iaddr);
+          if (j.counterparty_iaddr) seen.add(j.counterparty_iaddr);
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.warn(`[watch-list] getidentityhistory failed for ${iaddr}: ${e?.message}`);
+  }
+  _counterpartyWatchCache.set(iaddr, seen);
+  return seen;
+}
+
 async function fetchMarketBundle() {
   const [reqRes, offRes, mchRes] = await Promise.all([
     fetchOneMarketTab("/contracts/loans/requests?pageSize=200"),
@@ -1135,6 +1184,16 @@ async function fetchMarketBundle() {
       if (mySet.has(m.match_iaddr) && m.request?.iaddr && !mySet.has(m.request.iaddr)) {
         counterpartyIaddrs.add(m.request.iaddr);
       }
+    }
+    // Cold-start: ALSO seed counterparties from each of my identities'
+    // past interactions (identity history). This catches first-time
+    // mempool requests targeting me even when explorer hasn't seen them
+    // yet — e.g. a borrower posts a target_lender_iaddr-scoped request
+    // and we have no past explorer match to seed from. The historical
+    // walk runs ONCE per scope-change and caches in module memory.
+    for (const ia of myIaddrs) {
+      const seeds = await getCounterpartyWatchList(ia).catch(() => []);
+      for (const cp of seeds) if (!mySet.has(cp)) counterpartyIaddrs.add(cp);
     }
     const VDXF_LOAN_MATCH_LOCAL = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
     const VDXF_LOAN_REQUEST_LOCAL = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
@@ -1203,6 +1262,9 @@ function invalidateMarketCache() {
     slot.data = null;
     slot.inflight = null;
   }
+  // Watch list is derived from identityhistory; invalidate so the next
+  // fetch re-walks (catches counterparties added since last walk).
+  _counterpartyWatchCache.clear();
 }
 async function loadMarket() {
   const myToken = ++_marketLoadToken;
@@ -2981,7 +3043,37 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // and amount, so we must verify they match the request and pay
       // the lender's verified primary R-address.
       btn.textContent = "Verifying match safety…";
-      const _req = matchResolvedRequest.get(matchKey) || (r.request?.txid ? await fetchRequestFromLocalDaemon(r.request.txid).catch(() => null) : null);
+      // ALWAYS re-fetch the request from chain at safety-check time. The
+      // matchResolvedRequest cache is populated at render and can be stale
+      // if the borrower (or someone) replaced the request entry on chain
+      // before the borrower clicked Accept. Stale-cache here would cause
+      // the safety check to compare the lender's match against an OLD
+      // version of the request, throwing false-positive mismatches like
+      // "Tx-Repay output 0 amount X — expected Y" when both are correct
+      // for the CURRENT request but Y is from the cached old version.
+      let _req = null;
+      if (r.request?.txid) {
+        _req = await fetchRequestFromLocalDaemon(r.request.txid).catch(() => null);
+      }
+      if (!_req) {
+        // Fallback: read the borrower's identity directly for the most
+        // recent loan.request entry whose target_lender_iaddr matches us.
+        try {
+          const bi = await rpc("getidentity", [r.request?.iaddr, -1]);
+          for (const e of (bi?.identity?.contentmultimap?.[VDXF_LOAN_REQUEST] || [])) {
+            const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
+            if (!hex) continue;
+            try {
+              const j = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
+              if (j.target_lender_iaddr === acting) { _req = j; break; }
+            } catch {}
+          }
+        } catch {}
+      }
+      if (!_req) {
+        // Last resort — fall back to the cache if it exists.
+        _req = matchResolvedRequest.get(matchKey);
+      }
       if (!_req) throw new Error("can't verify match — original request payload not found");
       const safetyErrors = await verifyMatchSafety(r, _req, acting);
       if (safetyErrors.length > 0) {
