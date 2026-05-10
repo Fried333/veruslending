@@ -38,44 +38,35 @@ function currencyOptions(selected = "VRSC") {
 
 // VDXF key transition: vrsc::contract.* → vcs::contract.*
 //
-// New (active write) keys — what new entries get posted under from now on.
-// Legacy keys — what entries were posted under before the rename. Reads on
-// the History tab consult BOTH so past loans keep surfacing; reads on
-// Marketplace / Active Loans look only at the new keys (nothing live
-// remains under the legacy keys).
-const VDXF_LOAN_REQUEST  = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW"; // vcs::contract.loan.request
-const VDXF_LOAN_MATCH    = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt"; // vcs::contract.loan.match
-const VDXF_LOAN_STATUS   = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j"; // vcs::contract.loan.status
-const VDXF_LOAN_HISTORY  = "iBGuPDeeHHYpvKdM7VG2d7LR1Lct9itcpT"; // vcs::contract.loan.history
-const VDXF_LOAN_DECLINE  = "iBhQXJ21aqiH9kFvGqUrQy7MnKBdq1eyKc"; // vrsc::contract.loan.decline
+// Canonical VDXF keys, all under the registered standard owner make.VRSC@
+// (iLWvRsiWVCEuFYhCSt2Qba7LxWksrgVerX). Names: make.vrsc::contract.<slug>.
+// Older `vcs::contract.*` and `vrsc::contract.*` entries that exist on chain
+// are deliberately NOT supported — pre-release test data only, no live users.
+const VDXF_LOAN_OFFER    = "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz"; // make.vrsc::contract.loan.offer
+const VDXF_LOAN_REQUEST  = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5"; // make.vrsc::contract.loan.request
+const VDXF_LOAN_MATCH    = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U"; // make.vrsc::contract.loan.match
+const VDXF_LOAN_STATUS   = "iRzM96sNYj95mUiJebzBnFwirjfws2q6o4"; // make.vrsc::contract.loan.status
+const VDXF_LOAN_HISTORY  = "i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW"; // make.vrsc::contract.loan.history
+const VDXF_LOAN_DECLINE  = "iEgciB3u2GwTxzShQR4eFhtj4k8Zv6frNb"; // make.vrsc::contract.loan.decline
+const VDXF_OPTION_OFFER  = "i5L8vkz9xsnM8yEDiXzPbP4Kix3SnJSsv5"; // make.vrsc::contract.option.offer
 
-const VDXF_LOAN_REQUEST_LEGACY = "iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28";
-const VDXF_LOAN_MATCH_LEGACY   = "iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT";
-const VDXF_LOAN_STATUS_LEGACY  = "iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys";
-const VDXF_LOAN_HISTORY_LEGACY = "i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb";
-
-// Read-set: new + legacy. Iterate to surface entries posted under either.
-const VDXF_LOAN_REQUEST_KEYS = [VDXF_LOAN_REQUEST, VDXF_LOAN_REQUEST_LEGACY];
-const VDXF_LOAN_MATCH_KEYS   = [VDXF_LOAN_MATCH,   VDXF_LOAN_MATCH_LEGACY];
-const VDXF_LOAN_STATUS_KEYS  = [VDXF_LOAN_STATUS,  VDXF_LOAN_STATUS_LEGACY];
-const VDXF_LOAN_HISTORY_KEYS = [VDXF_LOAN_HISTORY, VDXF_LOAN_HISTORY_LEGACY];
+// All read paths use these single-element arrays (kept for code shape so
+// the *_KEYS pattern is unchanged when adding legacy tiers later, if ever).
+const VDXF_LOAN_OFFER_KEYS   = [VDXF_LOAN_OFFER];
+const VDXF_LOAN_REQUEST_KEYS = [VDXF_LOAN_REQUEST];
+const VDXF_LOAN_MATCH_KEYS   = [VDXF_LOAN_MATCH];
+const VDXF_LOAN_STATUS_KEYS  = [VDXF_LOAN_STATUS];
+const VDXF_LOAN_HISTORY_KEYS = [VDXF_LOAN_HISTORY];
+const VDXF_LOAN_DECLINE_KEYS = [VDXF_LOAN_DECLINE];
 
 const VDXF = {
-  "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY": { slug: "loan.offer",    label: "Loan offer" },
-  // Active (vcs::contract.*) — written by current code.
-  [VDXF_LOAN_REQUEST]:                   { slug: "loan.request",  label: "Loan request" },
-  [VDXF_LOAN_MATCH]:                     { slug: "loan.match",    label: "Loan match" },
-  [VDXF_LOAN_STATUS]:                    { slug: "loan.status",   label: "Loan active" },
-  [VDXF_LOAN_HISTORY]:                   { slug: "loan.history",  label: "Loan settled" },
-  [VDXF_LOAN_DECLINE]:                   { slug: "loan.decline",  label: "Loan declined" },
-  // Legacy (vrsc::contract.*) — read-only, kept so historical entries label
-  // correctly in the UI.
-  [VDXF_LOAN_REQUEST_LEGACY]:            { slug: "loan.request",  label: "Loan request (legacy)" },
-  [VDXF_LOAN_MATCH_LEGACY]:              { slug: "loan.match",    label: "Loan match (legacy)" },
-  [VDXF_LOAN_STATUS_LEGACY]:             { slug: "loan.status",   label: "Loan active (legacy)" },
-  [VDXF_LOAN_HISTORY_LEGACY]:            { slug: "loan.history",  label: "Loan settled (legacy)" },
-  "i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY":  { slug: "option.offer",  label: "Option offer" },
-  "iDE4csgPBx9Rn7H4zkn4VhSShcxcwmknQo":  { slug: "option.request",label: "Option request" },
+  [VDXF_LOAN_OFFER]:    { slug: "loan.offer",    label: "Loan offer" },
+  [VDXF_LOAN_REQUEST]:  { slug: "loan.request",  label: "Loan request" },
+  [VDXF_LOAN_MATCH]:    { slug: "loan.match",    label: "Loan match" },
+  [VDXF_LOAN_STATUS]:   { slug: "loan.status",   label: "Loan active" },
+  [VDXF_LOAN_HISTORY]:  { slug: "loan.history",  label: "Loan settled" },
+  [VDXF_LOAN_DECLINE]:  { slug: "loan.decline",  label: "Loan declined" },
+  [VDXF_OPTION_OFFER]:  { slug: "option.offer",  label: "Option offer" },
 };
 
 // ---------- helpers ----------
@@ -270,7 +261,7 @@ async function getPubkeyForRAddress(rAddr) {
 // originating tx and decoding the contentmultimap update. Used as a fallback
 // when scan.verus.cx is rate-limiting the explorer API.
 async function fetchRequestFromLocalDaemon(txid) {
-  const VDXF_LOAN_REQUEST = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+  const VDXF_LOAN_REQUEST = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
   const tx = await rpc("getrawtransaction", [txid, 1]);
   // The identity update is in tx.vout — find the one that has an identity
   // primary output and pull the contentmultimap from its scriptPubKey.
@@ -717,7 +708,7 @@ document.getElementById("ids-list")?.addEventListener("click", async (ev) => {
   let payload, vdxfId, slug;
   if (do_ === "preview-request") {
     slug = "loan.request";
-    vdxfId = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+    vdxfId = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
     const principalCurrency = f("principal_currency");
     payload = {
       version: 1,
@@ -729,7 +720,7 @@ document.getElementById("ids-list")?.addEventListener("click", async (ev) => {
     };
   } else if (do_ === "preview-offer") {
     slug = "loan.offer";
-    vdxfId = "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY";
+    vdxfId = "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz";
     const collateralBtns = form.querySelectorAll(".collateral-toggle .ctog.selected");
     const acceptedCollateral = Array.from(collateralBtns).map((b) => b.dataset.cur);
     payload = {
@@ -1210,8 +1201,8 @@ async function fetchMarketBundle() {
       const seeds = await getCounterpartyWatchList(ia).catch(() => []);
       for (const cp of seeds) if (!mySet.has(cp)) counterpartyIaddrs.add(cp);
     }
-    const VDXF_LOAN_MATCH_LOCAL = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
-    const VDXF_LOAN_REQUEST_LOCAL = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+    const VDXF_LOAN_MATCH_LOCAL = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
+    const VDXF_LOAN_REQUEST_LOCAL = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
     const seenMatchKeys = new Set((mchRes.results || []).map((m) =>
       `${m.match_iaddr}|${m.tx_a_txid || m.request?.txid || ""}`));
     const seenReqKeys = new Set((reqRes.results || []).map((r) =>
@@ -1301,6 +1292,20 @@ async function fetchLoansBundleDaemon(myIaddrs) {
   const offResultsPromise = fetchOneMarketTab("/contracts/loans/offers?pageSize=200")
     .then((r) => r?.results || [])
     .catch(() => []);
+  // Also fetch requests + matches from the explorer for first-contact
+  // discovery (a counterparty we've never transacted with sending us a
+  // directed loan.request, or a lender posting a loan.match for us
+  // before we've added them to the watch list). Once we've interacted,
+  // the watch-list daemon walk below picks up subsequent updates
+  // mempool-fresh — but the FIRST sighting needs the indexer to
+  // generally surface "all requests with target=me" / "all matches with
+  // request.iaddr=me". Same parallel + cache TTL as offers.
+  const explReqResultsPromise = fetchOneMarketTab("/contracts/loans/requests?pageSize=200")
+    .then((r) => r?.results || [])
+    .catch(() => []);
+  const explMchResultsPromise = fetchOneMarketTab("/contracts/loans/matches?pageSize=200")
+    .then((r) => r?.results || [])
+    .catch(() => []);
   const ownOffResults = [];
 
   const decode = (e) => {
@@ -1309,9 +1314,9 @@ async function fetchLoansBundleDaemon(myIaddrs) {
     try { return JSON.parse(new TextDecoder().decode(_hexToBytes(hex))); }
     catch { return null; }
   };
-  const VDXF_REQ = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
-  const VDXF_MCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
-  const VDXF_OFF = "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY";
+  const VDXF_REQ = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
+  const VDXF_MCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
+  const VDXF_OFF = "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz";
 
   // 1. Walk each acting iaddr's own multimap. Captures my own posts.
   //    Also collects counterparty iaddrs to watch (target_lender_iaddr
@@ -1379,6 +1384,30 @@ async function fetchLoansBundleDaemon(myIaddrs) {
     ...ownOffResults,
     ...explorerOffers.filter((o) => !ownIaddrs.has(o.iaddr)),
   ];
+
+  // Merge explorer-fetched requests/matches into the daemon-walked sets.
+  // Daemon-walk is mempool-fresh for known counterparties, but for FIRST
+  // contact (a stranger sending us a directed request) we need the
+  // indexer's network-wide view. Dedup by request txid / match key so we
+  // don't double-count when both paths see the same entry.
+  const explorerReqs = await explReqResultsPromise;
+  const explorerMchs = await explMchResultsPromise;
+  const seenReqKeys = new Set(reqResults.map((r) => `${r.iaddr}|${r.posted_tx || ""}`));
+  for (const r of explorerReqs) {
+    if (!r.target_lender_iaddr || !mySet.has(r.target_lender_iaddr)) continue;
+    const key = `${r.iaddr}|${r.posted_tx || ""}`;
+    if (seenReqKeys.has(key)) continue;
+    seenReqKeys.add(key);
+    reqResults.push(r);
+  }
+  const seenMchKeys = new Set(mchResults.map((m) => `${m.match_iaddr}|${m.tx_a_txid || m.request?.txid || ""}`));
+  for (const m of explorerMchs) {
+    if (!m.request?.iaddr || !mySet.has(m.request.iaddr)) continue;
+    const key = `${m.match_iaddr}|${m.tx_a_txid || m.request?.txid || ""}`;
+    if (seenMchKeys.has(key)) continue;
+    seenMchKeys.add(key);
+    mchResults.push(m);
+  }
 
   return [
     { results: reqResults },
@@ -1588,7 +1617,7 @@ async function loadMarket() {
     // via daemon (NOT /loans/by-party) so it catches orphan matches whose
     // request_txid points to a now-replaced version of the request.
     const matchedWithBorrowers = new Set();
-    const VDXF_LOAN_MATCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+    const VDXF_LOAN_MATCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
     for (const ia of partyAddrs) {
       try {
         const info = await rpc("getidentity", [ia, -1]);
@@ -2285,7 +2314,7 @@ function renderMarketRequest(r, mySet, myMap, acting) {
   const requestKey = `req-${r.iaddr}-${r.posted_tx || ""}`;
   requestByKey.set(requestKey, r);
   return `
-    <div class="card mp-row" data-iaddr="${escapeHtml(r.iaddr)}" data-name="${escapeHtml(me?.name || "")}" data-parent="${escapeHtml(me?.parent || "")}" data-vdxf="iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW" data-request-key="${escapeHtml(requestKey)}">
+    <div class="card mp-row" data-iaddr="${escapeHtml(r.iaddr)}" data-name="${escapeHtml(me?.name || "")}" data-parent="${escapeHtml(me?.parent || "")}" data-vdxf="iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5" data-request-key="${escapeHtml(requestKey)}">
       <div class="row">
         <strong style="flex:1">${escapeHtml(r.fullyQualifiedName || r.name + "@")}</strong>
         <span class="badge loan-request">Loan request</span>
@@ -2320,7 +2349,7 @@ function renderMarketOffer(r, mySet, myMap, acting) {
   // as the principal→collateral multiplier).
   const prefillName = r.fullyQualifiedName || (r.name ? r.name + "@" : r.iaddr);
   return `
-    <div class="card mp-row" data-iaddr="${escapeHtml(r.iaddr)}" data-name="${escapeHtml(me?.name || "")}" data-parent="${escapeHtml(me?.parent || "")}" data-vdxf="iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY"
+    <div class="card mp-row" data-iaddr="${escapeHtml(r.iaddr)}" data-name="${escapeHtml(me?.name || "")}" data-parent="${escapeHtml(me?.parent || "")}" data-vdxf="iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz"
          data-offer-fqn="${escapeHtml(prefillName)}"
          data-offer-rate="${r.rate ?? ""}" data-offer-term="${r.term_days ?? ""}"
          data-offer-max-principal="${(r.max_principal && r.max_principal.amount) || ""}"
@@ -2407,7 +2436,7 @@ function renderMarketMatch(r, mySet, myMap, acting) {
   const matchKey = `match-${r.match_iaddr}-${r.request?.iaddr || ""}`;
   matchByKey.set(matchKey, r);
   return `
-    <div class="card mp-row" data-iaddr="${escapeHtml(r.match_iaddr)}" data-name="${escapeHtml(me?.name || "")}" data-parent="${escapeHtml(me?.parent || "")}" data-vdxf="i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt" data-match-key="${escapeHtml(matchKey)}">
+    <div class="card mp-row" data-iaddr="${escapeHtml(r.match_iaddr)}" data-name="${escapeHtml(me?.name || "")}" data-parent="${escapeHtml(me?.parent || "")}" data-vdxf="iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U" data-match-key="${escapeHtml(matchKey)}">
       <div class="row">
         <strong style="flex:1">From <span style="color:var(--accent)">${escapeHtml(r.fullyQualifiedName || r.name + "@")}</span></strong>
         <span class="badge loan-match">Loan match</span>
@@ -2729,7 +2758,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // signed Tx-A skeleton, so we have to read it directly).
       const borrowerInfo = await rpc("getidentity", [r.iaddr, -1]);
       try {
-        const VDXF_LOAN_REQUEST = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+        const VDXF_LOAN_REQUEST = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
         const cm = borrowerInfo?.identity?.contentmultimap || {};
         const entries = cm[VDXF_LOAN_REQUEST] || [];
         for (const e of entries) {
@@ -3130,7 +3159,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
 
       // Read existing multimap entries on lender's identity to merge with our new one.
       const existing = (lenderInfoCache.get(acting) || (await rpc("getidentity", [acting, -1])).identity)?.contentmultimap || {};
-      const VDXF_LOAN_MATCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+      const VDXF_LOAN_MATCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
       const newMultimap = { ...existing };
       // Normalize preserved entries to hex strings (defensive — see
       // accept-v2 for context).
@@ -3214,7 +3243,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
     // multimap entry from the lender's iaddr so we know which UI flow to show.
     try {
       const lenderInfo = await rpc("getidentity", [r.match_iaddr, -1]);
-      const VDXF_LOAN_MATCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+      const VDXF_LOAN_MATCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
       const cm = lenderInfo?.identity?.contentmultimap || {};
       const entries = cm[VDXF_LOAN_MATCH] || [];
       for (const e of entries) {
@@ -3274,7 +3303,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // Re-fetch the raw multimap entry from the lender's iaddr to get them.
       try {
         const lenderInfo = await rpc("getidentity", [r.match_iaddr, -1]);
-        const VDXF_LOAN_MATCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+        const VDXF_LOAN_MATCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
         const cm = lenderInfo?.identity?.contentmultimap || {};
         const entries = cm[VDXF_LOAN_MATCH] || [];
         for (const e of entries) {
@@ -3401,7 +3430,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       btn.textContent = "Posting Tx-B + loan.status to your VerusID…";
       const idInfo = await rpc("getidentity", [acting, -1]);
       const existing = idInfo?.identity?.contentmultimap || {};
-      const VDXF_LOAN_STATUS = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j";
+      const VDXF_LOAN_STATUS = "iRzM96sNYj95mUiJebzBnFwirjfws2q6o4";
       const statusPayload = {
         version: 3,
         role: "borrower",
@@ -3450,7 +3479,7 @@ document.getElementById("market-list").addEventListener("click", async (ev) => {
       // entry atomically with adding loan.status keeps the borrower's
       // multimap reflecting current truth and removes the stale request
       // from lender-side discovery views.
-      const VDXF_LOAN_REQUEST = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+      const VDXF_LOAN_REQUEST = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
       delete newCm[VDXF_LOAN_REQUEST];
       // Diag: log the exact payload shape being sent. Helps debug
       // "Invalid JSON ID parameter" errors from the daemon.
@@ -3635,8 +3664,8 @@ async function unlockEntryUtxos(vdxfId, entry) {
     const hex = typeof entry === "string" ? entry : (entry?.serializedhex || entry?.message || "");
     if (!hex) return;
     const payload = JSON.parse(new TextDecoder().decode(_hexToBytes(hex)));
-    const VDXF_LOAN_REQUEST = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
-    const VDXF_LOAN_MATCH   = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+    const VDXF_LOAN_REQUEST = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
+    const VDXF_LOAN_MATCH   = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
     const txHex = vdxfId === VDXF_LOAN_REQUEST ? payload.borrower_input_signed_hex
                 : vdxfId === VDXF_LOAN_MATCH   ? payload.tx_a_full
                 : null;
@@ -4085,7 +4114,7 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
   if (action === "preview-request") {
     console.log(`[preview] entered. iaddr=${iaddr} name=${name} parent=${parent}`);
     slug = "loan.request";
-    vdxfId = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
+    vdxfId = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
     const principalCurrency = f("principal_currency");
     const collateralCurrency = f("collateral_currency");
     const principalAmount = parseFloat(f("principal_amount"));
@@ -4256,7 +4285,7 @@ document.getElementById("mp-post-form").addEventListener("click", async (ev) => 
     };
   } else if (action === "preview-offer") {
     slug = "loan.offer";
-    vdxfId = "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY";
+    vdxfId = "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz";
     const collateralBtns = formEl.querySelectorAll(".collateral-toggle .ctog.selected");
     payload = {
       version: 1,
@@ -4315,10 +4344,10 @@ let pendingMarketBroadcast = null;
 // explorer API.
 async function fetchActiveLoansFromDaemon(actingIa) {
   if (!actingIa || actingIa === "all") return [];
-  const VDXF_LOAN_REQUEST = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
-  const VDXF_LOAN_MATCH   = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
-  const VDXF_LOAN_STATUS  = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j";
-  const VDXF_LOAN_HISTORY = "iBGuPDeeHHYpvKdM7VG2d7LR1Lct9itcpT";
+  const VDXF_LOAN_REQUEST = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
+  const VDXF_LOAN_MATCH   = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
+  const VDXF_LOAN_STATUS  = "iRzM96sNYj95mUiJebzBnFwirjfws2q6o4";
+  const VDXF_LOAN_HISTORY = "i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW";
 
   const decode = (e) => {
     const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
@@ -4469,7 +4498,7 @@ async function loadLoans(targetEl) {
     let info;
     try { info = await rpc("getidentity", [ia, -1]); } catch { continue; }
     const cm = info?.identity?.contentmultimap || {};
-    const VDXF_LOAN_STATUS = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j";
+    const VDXF_LOAN_STATUS = "iRzM96sNYj95mUiJebzBnFwirjfws2q6o4";
     for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
       const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
       if (!hex) continue;
@@ -4704,7 +4733,7 @@ async function enrichActiveLoanBalances() {
       if (!acting || acting === "all") throw new Error("set acting identity first");
       const idInfo = await rpc("getidentity", [acting, -1]);
       const existing = idInfo?.identity?.contentmultimap || {};
-      const VDXF_LOAN_MATCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+      const VDXF_LOAN_MATCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
       const counterpartyIa = btn.dataset.counterpartyIaddr || "";
       // Drop any active match where request.iaddr matches the borrower
       // we're cancelling against. Other matches (different borrowers)
@@ -4771,7 +4800,7 @@ async function enrichActiveLoanBalances() {
       const acting = actingIaddr();
       const idInfo = await rpc("getidentity", [acting, -1]);
       const cm = idInfo?.identity?.contentmultimap || {};
-      const VDXF_LOAN_STATUS = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j";
+      const VDXF_LOAN_STATUS = "iRzM96sNYj95mUiJebzBnFwirjfws2q6o4";
       let status = null;
       for (const e of (cm[VDXF_LOAN_STATUS] || [])) {
         const hex = typeof e === "string" ? e : (e?.serializedhex || e?.message || "");
@@ -4835,7 +4864,7 @@ async function enrichActiveLoanBalances() {
         btn.textContent = "Recovering Tx-Repay from lender's loan.match…";
         const lenderIa = status.match_iaddr;
         if (!lenderIa) throw new Error("loan.status missing match_iaddr — can't recover Tx-Repay from chain");
-        const VDXF_LOAN_MATCH = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
+        const VDXF_LOAN_MATCH = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
         let matchPayload = null;
         // Tier 3: current state.
         const lenderInfo = await rpc("getidentity", [lenderIa, -1]);
@@ -4994,7 +5023,7 @@ async function enrichActiveLoanBalances() {
 
       // Post loan.history (settled = repaid) on borrower's identity for credit-score
       btn.textContent = "Posting loan.history (settled)…";
-      const VDXF_LOAN_HISTORY = "iBGuPDeeHHYpvKdM7VG2d7LR1Lct9itcpT";
+      const VDXF_LOAN_HISTORY = "i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW";
       const historyPayload = {
         version: 3,
         role: "borrower",
@@ -5762,9 +5791,9 @@ async function autoAcceptWatcher() {
   try {
     const myIaddrs = await inScopeIaddrs();
     if (myIaddrs.length === 0) return;
-    const VDXF_LOAN_REQUEST = "iFg76F9M8CV5xEg3L2NvCDBXufaxjUWhaW";
-    const VDXF_LOAN_MATCH   = "i4G69W7e3UJRCinuP7TFBRnm3ZUiXzPkFt";
-    const VDXF_LOAN_STATUS  = "iPnrakyY951QEy6xUYBuJoobHA9JKY6G8j";
+    const VDXF_LOAN_REQUEST = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5";
+    const VDXF_LOAN_MATCH   = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U";
+    const VDXF_LOAN_STATUS  = "iRzM96sNYj95mUiJebzBnFwirjfws2q6o4";
 
     for (const ia of myIaddrs) {
       const info = await rpc("getidentity", [ia, -1]).catch(() => null);

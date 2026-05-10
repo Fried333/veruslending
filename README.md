@@ -1,16 +1,39 @@
-# VerusLending
+# Make Protocol
 
-A peer-to-peer collateralized credit protocol on Verus.
+**Composable on-chain agreements for Verus, without a virtual machine.**
 
-![VerusLending Protocol Lifecycle](https://raw.githubusercontent.com/Fried333/veruslending/main/diagram.svg)
+No smart-contract bytecode. No arbiter. No oracle. No liquidation bot. Just pre-signed atomic transactions held privately by each party and broadcast unilaterally when needed. The chain is the only judge.
 
-## In one sentence
+![Make Protocol Lifecycle](https://raw.githubusercontent.com/Fried333/make-protocol/main/diagram.svg)
 
-Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of repayment, default, and rescue paths — no arbiter, no committee, no third-party intermediary, no liquidation bots, no panic button.
+## Primitives
 
-## In one paragraph
+All settle via `SIGHASH_SINGLE|ANYONECANPAY` pre-signed transactions; all marketplace + reputation data lives on VerusID `contentmultimap` entries.
 
-VerusLending is a credit primitive built from existing Verus features: **P2SH 2-of-2 multisig** (no identity registration required), atomic raw transactions, and pre-signed time-locked transactions using `SIGHASH_SINGLE|ANYONECANPAY`. At origination, both parties cooperatively create a vault holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Lender stonewalling is structurally impossible. Subjective disputes go to real-world courts with the chain record as admissible evidence. VerusIDs are not required for the cryptographic protocol but provide the marketplace data layer (offer discovery + on-chain reputation) for unknown-party flows.
+- **Loan** — borrower locks collateral in a 2-of-2 P2SH vault, holds a pre-signed `Tx-Repay` (broadcast any time during the loan), lender holds a pre-signed `Tx-B` (broadcast after maturity if borrower defaults). Lender stonewalling is structurally impossible — no live cooperation needed at settle.
+- **Option** — premium-paid, atomic exercise or expiry-recovery.
+- **Escrow** — multi-party, time-locked.
+- **Swap** — atomic cross-currency.
+
+## VDXF namespace
+
+All keys live under the registered standard owner `make.VRSC@` (i-address `iLWvRsiWVCEuFYhCSt2Qba7LxWksrgVerX`):
+
+```
+make.vrsc::contract.<usecase>.<entity>
+```
+
+e.g. `make.vrsc::contract.loan.offer`, `make.vrsc::contract.option.exercise`. See [SCHEMA.md](./SCHEMA.md) for the full table of canonical i-addresses.
+
+## How it runs
+
+Just a Verus daemon. Your daemon is mempool-aware (`getidentity <iaddr> -1`), P2P propagates between counterparties in ~5s, no 3rd-party RPC required for active-loan ops. A public block explorer (e.g. [scan.verus.cx](https://scan.verus.cx)) is a convenience for stranger-discovery — browsing offers from parties you haven't met yet — but not load-bearing for any active loan, repay, settle, or recovery flow.
+
+Reputation is chain-derived: past `loan.history` attestations name counterparties, so a settled loan shows up on both parties' reputation views regardless of which one wrote the attestation. No central scorer, no GUI dependency.
+
+## In one paragraph (deeper)
+
+Make Protocol is built from existing Verus features: **P2SH 2-of-2 multisig** (no identity registration required for the cryptographic core), atomic raw transactions, and pre-signed time-locked transactions using `SIGHASH_SINGLE|ANYONECANPAY`. At origination, both parties cooperatively create a vault holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Subjective disputes go to real-world courts with the chain record as admissible evidence. VerusIDs are not required for the cryptographic protocol but provide the marketplace data layer (offer discovery + on-chain reputation) for unknown-party flows.
 
 ## What's here
 
@@ -23,6 +46,10 @@ VerusLending is a credit primitive built from existing Verus features: **P2SH 2-
 - **[SCENARIOS.md](./SCENARIOS.md)** — full scenario test matrix
 - **[diagram.svg](./diagram.svg)** — protocol lifecycle diagram
 - **[LICENSE](./LICENSE)** — MIT
+
+## Reference clients
+
+- **[verus_contract_gui](https://github.com/Fried333/verus_contract_gui)** — local web app (Python + vanilla JS, no install) that browses and acts on this protocol against your own `verusd`. Reads/writes the VDXF keys and payload schemas defined in [SCHEMA.md](./SCHEMA.md). Anyone can fork or replace it — the chain is the source of truth, not any one client.
 
 The same primitive (SIGHASH_SINGLE|ANYONECANPAY pre-commit) supports multiple use cases:
 
@@ -58,7 +85,7 @@ See [TESTING.md](./TESTING.md) for txid references and [SCENARIOS.md](./SCENARIO
 
 ## Why it matters
 
-This is what private secured lending looked like before banks: two parties, a notarized agreement, time-based defaults. Existing crypto lending products that work today (Ledn, Unchained, Arch) re-create that model with corporate operators. VerusLending re-creates it with cryptographic enforcement instead — the chain is the notary, the parties are themselves, and the lender's commitment is enforced by signature mechanics rather than by external accountability.
+This is what private secured lending looked like before banks: two parties, a notarized agreement, time-based defaults. Existing crypto lending products that work today (Ledn, Unchained, Arch) re-create that model with corporate operators. The Make Protocol re-creates it with cryptographic enforcement instead — the chain is the notary, the parties are themselves, and the lender's commitment is enforced by signature mechanics rather than by external accountability.
 
 The protocol is intentionally minimal:
 
@@ -146,11 +173,11 @@ Verus Wallet V2 (Chrome extension, non-custodial, direct daemon RPC) is the refe
 
 This protocol is a **peer-to-peer fixed-term primitive**. It's complementary to other lending models the Verus ecosystem may support:
 
-- **Basket-based pool lending** (a future Verus direction): currency baskets become lending pools with dynamic interest rates based on collateral/loan ratios; LPs earn fees by holding basket tokens; margin call enforcement via import rollup or validator-incentivized redemption. Best fit for retail / anonymous / market-rate lending. Different model from VerusLending — different use case.
+- **Basket-based pool lending** (a future Verus direction): currency baskets become lending pools with dynamic interest rates based on collateral/loan ratios; LPs earn fees by holding basket tokens; margin call enforcement via import rollup or validator-incentivized redemption. Best fit for retail / anonymous / market-rate lending. Different model from the Make Protocol — different use case.
 
 - **Template outputs** (a future Verus feature): non-spending outputs that act as cross-tx constraints requiring a matching companion output with specified fields. When this lands, it would simplify some of the patterns we currently express via SIGHASH manipulation, and could enable cleaner vault-makes-offer designs that solve the empty-Pay-ID problem we encountered during testing.
 
-VerusLending serves the use case where two known parties want to enter a private, fixed-term, fixed-rate loan with cryptographic atomic settlement. Mike's basket-based lending vision serves the use case where anyone wants to borrow at market rates from a pooled liquidity source. Both should exist.
+The Make Protocol's loan primitive serves the use case where two known parties want to enter a private, fixed-term, fixed-rate loan with cryptographic atomic settlement. Mike's basket-based lending vision serves the use case where anyone wants to borrow at market rates from a pooled liquidity source. Both should exist.
 
 ## Contributing
 

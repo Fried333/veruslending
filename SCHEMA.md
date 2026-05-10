@@ -12,43 +12,43 @@ expose this data, but never amend or override what's on chain.
 
 ## 1. VDXF key namespace
 
-All keys live under the VRSC system namespace (`vrsc::`) under the
-top-level category `contract`. This sits at the same level as Verus's
-existing `system`, `profile`, and `contentmultimap` categories.
+All keys live under the registered standard owner **`make.VRSC@`**
+(`iLWvRsiWVCEuFYhCSt2Qba7LxWksrgVerX`) — sub-namespace of VRSC's identity
+system. Format:
 
 ```
-vrsc::contract.<usecase>.<entity>
+make.vrsc::contract.<usecase>.<entity>
 ```
 
-Singular `contract` matches Verus's own convention (`system`, `profile`,
-`contentmultimap` are all singular).
+The `make@` identity is the published owner of this standard. Anyone
+verifying the canonical VDXF id for a slug computes
+`verus getvdxfid "make.vrsc::contract.<slug>"` and gets the
+deterministic i-address listed below.
 
 ### Locked VDXF keys
 
 | Key | VDXF id | Purpose | Visibility |
 |---|---|---|---|
-| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | lender's rate sheet | public |
-| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | borrower's specific request | public |
-| `vrsc::contract.loan.match`     | `iBvgGuNNVxEQYCeDD4uPykgrGbWnyTQhGT` | lender's pre-signed funding offer for a specific request | public |
-| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | active loan state (per party) | public |
-| `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | settled outcome attestation | public |
-| `vrsc::contract.loan.decline`   | `iBhQXJ21aqiH9kFvGqUrQy7MnKBdq1eyKc` | lender's "polite no" to a request | public |
-| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | acceptance handshake (legacy, superseded by loan.match) | encrypted |
-| `vrsc::contract.loan.template`  | `i7HCaxjju3QRYmbC23g5QD2smMk4PqaXFq` | pre-signed tx backup (deprecated — see TESTING §38, all data recoverable from past identity revisions) | unused |
-| `vrsc::contract.option.offer`   | `i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY` | option writer's terms | public |
-| `vrsc::contract.option.history` | `iEdahQZgGRhECPfHTvb1P8C7y5LVaqKvjt` | option outcome | public |
-| `vrsc::contract.option.status`  | `iK8rYBePsedzPGA1Hi9vnu6Q2KKegfKqcU` | active option state | public |
-| `vrsc::contract.option.accept`  | `iFHZXqCZotgb2KnBWx2tXZTsBrNSdiuNh8` | option acceptance | encrypted |
-| `vrsc::contract.option.template`| `iPUF3WuEdz8UMZERrifLL5xDujVDvr8EwA` | option templates | encrypted (self) |
-| `vrsc::contract.escrow.offer`   | `iHpajXqKrTDDMo7JQwzjuxkiSExhkWM3hZ` | escrow service offer | public |
-| `vrsc::contract.escrow.history` | `iDUTbfMdv6h1M6pufxMT6Q6DTVGSDH1c5K` | escrow outcome | public |
-| `vrsc::contract.escrow.status`  | `i5ymyC5CX47okFKhLzjd1jws3A6c4zA4TZ` | active escrow state | public |
-| `vrsc::contract.escrow.accept`  | `iL6CknRLami1deqoA7QgcTA74jQZZ1aNm6` | escrow acceptance | encrypted |
-| `vrsc::contract.escrow.template`| `iN7tcUBzvJcNKjgdSXquiKKLoX36TkpZfM` | escrow templates | encrypted (self) |
-| `vrsc::contract.swap.offer`     | `iMJXdbEqZ1wS4SGKSJGFp4vzcDUhhciZGV` | atomic swap offer | public |
+| `make.vrsc::contract.loan.offer`     | `iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz` | lender's rate sheet | public |
+| `make.vrsc::contract.loan.request`   | `iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5` | borrower's specific request | public |
+| `make.vrsc::contract.loan.match`     | `iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U` | lender's pre-signed funding offer for a specific request | public |
+| `make.vrsc::contract.loan.status`    | `iRzM96sNYj95mUiJebzBnFwirjfws2q6o4` | active loan state (per party) — dropped on settle | public |
+| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | settled outcome attestation (terminal record) | public |
+| `make.vrsc::contract.loan.decline`   | `iEgciB3u2GwTxzShQR4eFhtj4k8Zv6frNb` | lender's "polite no" to a request | public |
+| `make.vrsc::contract.option.offer`   | `i5L8vkz9xsnM8yEDiXzPbP4Kix3SnJSsv5` | option writer's terms | public |
+| `make.vrsc::contract.option.history` | `iEpGx4EYQhyisfmavGcRdEBvBeTo8eV2vj` | option outcome | public |
+| `make.vrsc::contract.option.status`  | `iG2byqSwFf4aABPgyMNUEiqPEKrrzYxDxA` | active option state | public |
+| `make.vrsc::contract.option.accept`  | `i8wykTMkYtmWD5Kj9xvA2yDTuBM9GCf615` | option acceptance | encrypted |
+| `make.vrsc::contract.option.template`| `iNpgbdquf8nahoaxypQReNhmWQ4ACxHy5i` | option templates | encrypted (self) |
+| `make.vrsc::contract.escrow.offer`   | `iKc8vAPTCaRDdPFa1CRbinByDCCtgXDnc4` | escrow service offer | public |
+| `make.vrsc::contract.escrow.history` | `iNY8KSoyvbJEuGc6Ji7qFmGkC3Zs15ehLe` | escrow outcome | public |
+| `make.vrsc::contract.escrow.status`  | `iFAqSsJ5Gk6meJhBmo8FoyJZdEzHDBZuXU` | active escrow state | public |
+| `make.vrsc::contract.escrow.accept`  | `i8kjTVynpRb2TtgHdbCEo1GJSqysm421ec` | escrow acceptance | encrypted |
+| `make.vrsc::contract.escrow.template`| `iA6iyv6DgXv8mBPmzejo33hqbVCuFqMjHj` | escrow templates | encrypted (self) |
+| `make.vrsc::contract.swap.offer`     | `iPCV1rCMCJuBey8Ntu9f6x9JVehzqbBMUD` | atomic swap offer | public |
 
 VDXF ids are deterministic from the key string. Re-derive via
-`verus getvdxfid "vrsc::contract.loan.offer"`.
+`verus getvdxfid "make.vrsc::contract.loan.offer"`.
 
 ### Versioning
 
@@ -97,9 +97,35 @@ decrypt with their seed-derived z-key.
 ### Updates and deletes
 
 - **Update**: write the entire array back with the modified entry
-- **Delete**: write the array without the entry, OR set `active: false`
-  in the payload to soft-delete (preserves history while signaling stale)
+- **Delete**: write the array without the entry. Past revisions are
+  preserved in `getidentityhistory` — the chain remembers everything.
 - **Replace**: same as update — chain only sees the latest array
+
+### Lifecycle convention: live entries describe open positions
+
+`loan.status` (and analogously `loan.match`, future `option.position`,
+future `margin.position`) are **live entries** — they describe an
+*open* position. When that position closes (`Tx-Repay` for a loan,
+`Tx-B` claim for default, exercise / expiry for an option), the live
+entry is **dropped** from the multimap. The companion **`loan.history`**
+(or `option.history` / `margin.history`) entry is the canonical
+terminal record.
+
+In other words: presence of `loan.status` for a `loan_id` ⇔ the loan
+is open. Absence ⇔ either it never existed or it has settled (check
+`loan.history` for the outcome).
+
+The earlier "soft-delete with `active: false`" pattern is **deprecated**.
+On-chain entries with `active: false` exist from before this convention
+landed; readers should treat them as terminal-state markers (lookup
+companion `loan.history` for the outcome) but not produce new ones.
+
+> **Rationale.** A live entry advertising that it's no longer live is a
+> contradiction. The original soft-delete was a workaround for readers
+> that didn't know about `loan.history`; with `loan.history` always
+> written on settle, dropping the live entry is cleaner, prevents
+> indefinite multimap growth, and keeps "is X currently active?"
+> queries honest.
 
 ---
 
@@ -405,8 +431,8 @@ GET  /api/vdxf/{vdxf_key_or_id}            # generic — any tracked key
         "iaddress": "i44CxABWkVnUhoPMjuM2ViJDDu2icd7jg7",
         "friendly": "3965555_108of200.vlotto@"
       },
-      "vdxf_key": "vrsc::contract.loan.offer",
-      "vdxf_id": "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY",
+      "vdxf_key": "make.vrsc::contract.loan.offer",
+      "vdxf_id": "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz",
       "entry_index": 0,
       "payload": { "...decoded JSON..." },
       "raw_hex": "7b22...",
