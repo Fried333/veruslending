@@ -22,13 +22,13 @@ Standard VDXF keys for marketplace entries (full registry in [SCHEMA.md](../SCHE
 
 | Key | VDXF id | Purpose |
 |---|---|---|
-| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | Lender publishes terms |
-| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | Borrower publishes terms |
-| `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | Outcome attestations (reputation) |
-| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | Active loan state |
-| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | Borrower's acceptance (encrypted) |
+| `make.vrsc::contract.loan.offer`     | `iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz` | Lender publishes terms |
+| `make.vrsc::contract.loan.request`   | `iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5` | Borrower publishes terms |
+| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | Outcome attestations (reputation) |
+| `make.vrsc::contract.loan.status`    | `iRzM96sNYj95mUiJebzBnFwirjfws2q6o4` | Active loan state |
+| `make.vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | Borrower's acceptance (encrypted) |
 
-Equivalent keys exist for options / escrow / swap (`vrsc::contract.option.offer`, `vrsc::contract.escrow.offer`, `vrsc::contract.swap.offer` etc). All use the same `vrsc::contract.<usecase>.<entity>` convention. See SCHEMA.md for the full set.
+Equivalent keys exist for options / escrow / swap (`make.vrsc::contract.option.offer`, `make.vrsc::contract.escrow.offer`, `make.vrsc::contract.swap.offer` etc). All use the same `make.vrsc::contract.<usecase>.<entity>` convention. See SCHEMA.md for the full set.
 
 ## What the user does
 
@@ -69,8 +69,8 @@ OFFER_HEX=$(echo -n "$OFFER_JSON" | python3 -c "import sys; print(sys.stdin.read
 ### Step 3 — Get the VDXF key
 
 ```bash
-verus getvdxfid "vrsc::contract.loan.offer"
-# Returns: {"vdxfid":"iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY", ...}
+verus getvdxfid "make.vrsc::contract.loan.offer"
+# Returns: {"vdxfid":"iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz", ...}
 ```
 
 The VDXF id is deterministic; everyone computing it gets the same result.
@@ -78,7 +78,7 @@ The VDXF id is deterministic; everyone computing it gets the same result.
 ### Step 4 — Write to your VerusID's multimap
 
 ```bash
-VDXF_KEY=iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY
+VDXF_KEY=iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz
 
 verus updateidentity "{
   \"name\": \"<your_id_name>\",
@@ -100,7 +100,7 @@ From any Verus node, anywhere:
 verus getidentity "<your_id>" | jq '.identity.contentmultimap'
 # Returns:
 # {
-#   "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY": [
+#   "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz": [
 #     "7b2276657273696f6e..."   # hex-encoded JSON
 #   ]
 # }
@@ -136,7 +136,7 @@ After a loan settles, both parties write a history entry to their own multimap. 
 }
 ```
 
-Same `updateidentity` flow as above, with VDXF key for `vrsc::contract.loan.history`.
+Same `updateidentity` flow as above, with VDXF key for `make.vrsc::contract.loan.history`.
 
 ---
 
@@ -157,9 +157,9 @@ Same `updateidentity` flow as above, with VDXF key for `vrsc::contract.loan.hist
 ```
 
 The wallet:
-1. Queries known/discovered VerusIDs for `vrsc::contract.loan.offer` (or `vrsc::contract.option.offer`, etc.)
+1. Queries known/discovered VerusIDs for `make.vrsc::contract.loan.offer` (or `make.vrsc::contract.option.offer`, etc.)
 2. Decodes hex JSON
-3. Aggregates each lender's `vrsc::contract.loan.history` entries → reputation summary
+3. Aggregates each lender's `make.vrsc::contract.loan.history` entries → reputation summary
 4. Renders with filtering/sorting
 5. On "Accept", initiates the cooperative ceremony (more multimap writes, encrypted)
 
@@ -174,7 +174,7 @@ For a wallet implementing this, the work is:
 
 ### Pattern A — walk all VerusIDs (doesn't scale)
 
-You can't easily query "all VerusIDs with a `vrsc::contract.loan.offer` entry." Verus's `listidentities` returns local wallet IDs only.
+You can't easily query "all VerusIDs with a `make.vrsc::contract.loan.offer` entry." Verus's `listidentities` returns local wallet IDs only.
 
 ### Pattern B — known parent ID convention
 
@@ -195,12 +195,12 @@ Block explorers index the chain for `updateidentity` calls with marketplace-rele
 
 ## Encrypted multimap entries
 
-Some entries are public (`vrsc::contract.loan.offer`); others should be encrypted (acceptance, ceremony coordination, settlement templates).
+Some entries are public (`make.vrsc::contract.loan.offer`); others should be encrypted (acceptance, ceremony coordination, settlement templates).
 
 ### Public entries
 
 ```json
-{ "vrsc::contract.loan.offer": ["<hex of JSON>"] }
+{ "make.vrsc::contract.loan.offer": ["<hex of JSON>"] }
 ```
 
 Anyone can decode. Use for offers, requests, public history.

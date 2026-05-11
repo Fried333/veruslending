@@ -67,20 +67,20 @@ OFFER='{
 }'
 HEX=$(echo -n "$OFFER" | python3 -c "import sys; print(sys.stdin.read().encode().hex())")
 
-# VDXF id for vrsc::contract.loan.offer (canonical, see SCHEMA.md)
-verus getvdxfid "vrsc::contract.loan.offer"
-# Returns: {"vdxfid":"iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY", ...}
+# VDXF id for make.vrsc::contract.loan.offer (canonical, see SCHEMA.md)
+verus getvdxfid "make.vrsc::contract.loan.offer"
+# Returns: {"vdxfid":"iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz", ...}
 
 # Write to Bob's VerusID
 verus updateidentity '{
   "name": "bob.lender@",
   "contentmultimap": {
-    "iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY": ["'$HEX'"]
+    "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz": ["'$HEX'"]
   }
 }'
 ```
 
-The offer is now publicly readable on chain. Borrowers find it via direct ID lookup (`getidentity bob.lender@`) or via a chain indexer that scans for `vrsc::contract.loan.offer` entries. See [marketplace.md](./marketplace.md).
+The offer is now publicly readable on chain. Borrowers find it via direct ID lookup (`getidentity bob.lender@`) or via a chain indexer that scans for `make.vrsc::contract.loan.offer` entries. See [marketplace.md](./marketplace.md).
 
 ### Phase 2 — Coordination (vault derivation)
 
@@ -263,8 +263,8 @@ In a Verus Wallet V2 implementation, all of the above is hidden behind UI. The u
 ```
 
 The wallet:
-1. Reads VerusID multimaps for `vrsc::contract.loan.offer` entries (see [marketplace.md](./marketplace.md))
-2. Renders offers with reputation summary aggregated from `vrsc::contract.loan.history` entries
+1. Reads VerusID multimaps for `make.vrsc::contract.loan.offer` entries (see [marketplace.md](./marketplace.md))
+2. Renders offers with reputation summary aggregated from `make.vrsc::contract.loan.history` entries
 3. On "Accept", coordinates the multi-step ceremony via encrypted multimap entries
 4. Stores templates as encrypted multimap entries on user's own VerusID for seed-recovery
 5. Displays "Repay" button when active; broadcasts Tx-Repay
@@ -278,7 +278,7 @@ All complexity is hidden. User clicks two buttons total.
 
 ### Key risks
 
-1. **Lost templates** — if a party loses the pre-signed hex AND doesn't have multimap backup, they can't broadcast. Mitigation: store templates encrypted in own VerusID's multimap (`vrsc::contract.loan.template`) for seed-recovery.
+1. **Lost templates** — if a party loses the pre-signed hex AND doesn't have multimap backup, they can't broadcast. Mitigation: store templates encrypted in own VerusID's multimap (`make.vrsc::contract.loan.template`) for seed-recovery.
 2. **Predicted txid mismatch** — if Tx-A's actual txid differs from what the templates referenced (rare with deterministic ECDSA), the templates point at a non-existent UTXO and won't broadcast. Mitigation: abort and restart the ceremony if Tx-A's txid changes after template signing.
 3. **Validate received templates before signing** — when one party receives the other's pre-signed Tx-Repay or Tx-B template, the wallet MUST verify Output 0 has the agreed amount and is paying the agreed party. The chain enforces what's signed; the wallet must verify what gets signed.
 4. **Cross-currency tooling caveat** — for non-VRSC inputs in templates, signing requires `signrawtransaction null null "SINGLE|ANYONECANPAY"` (the wallet key-lookup path). Explicit-key path fails. See [TESTING §32](../TESTING.md).
@@ -293,7 +293,7 @@ All complexity is hidden. User clicks two buttons total.
 
 ### What still requires off-chain trust (or chain-native equivalents)
 
-- **Counterparty discovery** — solved by VerusID multimap + reputation (`vrsc::contract.loan.history`)
+- **Counterparty discovery** — solved by VerusID multimap + reputation (`make.vrsc::contract.loan.history`)
 - **Agreeing on terms before origination** — discovery + acceptance handshake covers this
 - **Subjective dispute resolution** — use real-world courts; chain is admissible evidence
 

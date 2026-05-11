@@ -979,7 +979,7 @@ Vault P2SH is deterministic from `(borrower_pubkey, lender_pubkey)`, so the same
 
 ### 40. Lender decline — public "polite no" via loan.decline
 
-Validates the marketplace UX flow where a lender publicly declines a borrower's request instead of silently ignoring it. Reserves VDXF id `iBhQXJ21aqiH9kFvGqUrQy7MnKBdq1eyKc` for `vrsc::contract.loan.decline`.
+Validates the marketplace UX flow where a lender publicly declines a borrower's request instead of silently ignoring it. Reserves VDXF id `iEgciB3u2GwTxzShQR4eFhtj4k8Zv6frNb` for `make.vrsc::contract.loan.decline`.
 
 **Test (e2e scenario 14):** borrower posts request with `auto_accept=false` and `target_lender_iaddr=lender`. Lender's GUI renders the Fund panel automatically. Lender clicks **Decline** instead of **Confirm**. Asserts:
 

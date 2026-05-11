@@ -478,7 +478,7 @@ The contentmultimap of a VerusID functions as a chain-native marketplace data la
 
 ### Validated end-to-end: §33
 
-A loan offer was published as a multimap entry in a VerusID's contentmultimap (under an early-draft VDXF key `vrsc::loan.offer.v1` = `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy`) and read back identically from two independent Verus nodes (local + .44 in different physical locations). Tx: `694ed5cfc13d4fb0234d7fa2759a336b163c59b42ee0b71581ff816062bb00a8`. The canonical key set has since been finalised in [SCHEMA.md](./SCHEMA.md) under `vrsc::contract.*` — the early-draft key is no longer recognised.
+A loan offer was published as a multimap entry in a VerusID's contentmultimap (under an early-draft VDXF key `vrsc::loan.offer.v1` = `iDDdeciNHuSiggfZrquEBJAX5TUxkm2Sgy`) and read back identically from two independent Verus nodes (local + .44 in different physical locations). Tx: `694ed5cfc13d4fb0234d7fa2759a336b163c59b42ee0b71581ff816062bb00a8`. The canonical key set has since been finalised in [SCHEMA.md](./SCHEMA.md) under `make.vrsc::contract.*` — the early-draft key is no longer recognised.
 
 ### Standard entry types (Part II §12 defines canonical VDXF keys)
 
@@ -525,14 +525,14 @@ Each is a hex-encoded JSON payload under a canonical VDXF key. Wallets write to 
 
 ### What an explorer or wallet can show
 
-A page like `/lending/offers` queries known VerusIDs (or a filtered subset) for `vrsc::contract.loan.offer` entries and renders:
+A page like `/lending/offers` queries known VerusIDs (or a filtered subset) for `make.vrsc::contract.loan.offer` entries and renders:
 
 | Lender ID | Principal | Collateral | LTV | Rate | Term | Track Record |
 |---|---|---|---|---|---|---|
 | `bob.lender@` | 5 DAI | 10 VRSC | 50% | 10% | 30d | 47 settled / 2 defaulted |
 | `desk.lendingco@` | 1000 DAI | 2000 VRSC | 50% | 8% | 90d | 312 settled / 5 defaulted |
 
-Track record is computed from each lender's `vrsc::contract.loan.history` entries (§10).
+Track record is computed from each lender's `make.vrsc::contract.loan.history` entries (§10).
 
 ### Discovery scaling
 
@@ -648,20 +648,20 @@ Terms can be encrypted, leaving public visibility only to "VerusID alice@ has an
 
 ## 12. VDXF schema registry
 
-VDXF (Verus Data Exchange Format) keys are derived deterministically from string identifiers via `getvdxfid`. Anyone computing `getvdxfid "vrsc::contract.loan.offer"` gets the same canonical key.
+VDXF (Verus Data Exchange Format) keys are derived deterministically from string identifiers via `getvdxfid`. Anyone computing `getvdxfid "make.vrsc::contract.loan.offer"` gets the same canonical key.
 
-The canonical key set is namespaced under `vrsc::contract.<usecase>.<entity>` matching Verus's own convention (`vrsc::system.*`, `vrsc::profile.*`, `vrsc::contentmultimap.*`). Versioning lives inside the JSON payload (`{ "version": 1, … }`), not in the key string. See [SCHEMA.md](./SCHEMA.md) for the full registry including options / escrow / swap entries.
+The canonical key set is namespaced under `make.vrsc::contract.<usecase>.<entity>`, owned by the registered VerusID `make.VRSC@` (`iLWvRsiWVCEuFYhCSt2Qba7LxWksrgVerX`). Versioning lives inside the JSON payload (`{ "version": 1, … }`), not in the key string. See [SCHEMA.md](./SCHEMA.md) for the full registry including options / escrow / swap entries.
 
 ### Canonical keys (loan use case)
 
 | Key | VDXF id | Purpose | Visibility |
 |---|---|---|---|
-| `vrsc::contract.loan.offer`     | `iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY` | Lender's open offer | public |
-| `vrsc::contract.loan.request`   | `iPmnErqWbf5NhhWZEoccuX8yU8CgFt2d28` | Borrower's request | public |
-| `vrsc::contract.loan.history`   | `i92jad9CSjBNPCHgnHqQP4hK1facXBFDWb` | Outcome attestation (reputation source) | public |
-| `vrsc::contract.loan.status`    | `iP5b6uX8SM7ZSiiMbVWwGj9wG76KuJWZys` | Active loan state | public |
-| `vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | Borrower's acceptance handshake | encrypted |
-| `vrsc::contract.loan.template`  | `i7HCaxjju3QRYmbC23g5QD2smMk4PqaXFq` | Pre-signed Tx-A draft + Tx-Repay + Tx-B + Tx-C templates, bundled | encrypted (to self) |
+| `make.vrsc::contract.loan.offer`     | `iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz` | Lender's open offer | public |
+| `make.vrsc::contract.loan.request`   | `iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5` | Borrower's request | public |
+| `make.vrsc::contract.loan.match`     | `iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U` | Lender's pre-signed funding offer for a specific request | public |
+| `make.vrsc::contract.loan.status`    | `iRzM96sNYj95mUiJebzBnFwirjfws2q6o4` | Active loan state | public |
+| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | Settled outcome attestation (reputation source) | public |
+| `make.vrsc::contract.loan.decline`   | `iEgciB3u2GwTxzShQR4eFhtj4k8Zv6frNb` | Lender's "polite no" to a request | public |
 
 VDXF ids above are deterministic — re-derive at any time via `verus getvdxfid "<key>"`.
 
@@ -681,8 +681,8 @@ Each multimap entry value is a hex-encoded payload (`hex(utf8(JSON.stringify(pay
 
 A reference wallet implementation should provide:
 
-1. **Marketplace browsing** — query VerusIDs for `vrsc::contract.loan.offer` and `vrsc::contract.loan.request` entries; render as a filterable list.
-2. **Reputation aggregation** — for any candidate counterparty, fetch their `vrsc::contract.loan.history` entries and compute a summary (count, default rate, tenure, counterparty diversity).
+1. **Marketplace browsing** — query VerusIDs for `make.vrsc::contract.loan.offer` and `make.vrsc::contract.loan.request` entries; render as a filterable list.
+2. **Reputation aggregation** — for any candidate counterparty, fetch their `make.vrsc::contract.loan.history` entries and compute a summary (count, default rate, tenure, counterparty diversity).
 3. **Reputation gating** — let the user set thresholds (max default rate, min tenure, min loans). Hide or warn on offers below threshold.
 4. **Origination ceremony coordinator** — handle the multi-step signing dance via encrypted multimap writes; expose simple "Accept offer" UX.
 5. **Encrypted hex storage** — write pre-signed templates to user's own multimap as durable backup.

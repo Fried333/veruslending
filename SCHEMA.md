@@ -70,7 +70,7 @@ identity's `contentmultimap` array under the appropriate VDXF id.
 
 ```
 contentmultimap:
-  iA1vgVBV5B29h5pxQ67gxqCoEaLDZ8WbmY:
+  iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz:
     - "7b2276657273696f6e223a312c..."   # hex(JSON.stringify(payload))
     - "7b2276657273696f6e223a322c..."   # additional offer (multimap = array)
 ```
@@ -168,9 +168,13 @@ against specific requests they want to fund.
 ```json
 {
   "version": 1,
-  "max_principal":        { "currency": "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM", "amount": 100 },
-  "accepted_collateral":  ["i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV"],
-  "min_collateral_ratio": 1.98,
+  "max_principal_vrsc":   100,
+  "lend_currencies":      ["i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+                            "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM"],
+  "accepted_collateral":  ["i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
+                            "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM"],
+  "min_collateral_ratio": 2.0,
+  "slippage_pct":         1,
   "rate":                 0.01,
   "term_days":            30,
   "auto_fund":            true,
@@ -181,12 +185,37 @@ against specific requests they want to fund.
 
 Currency fields are i-addresses (see §2 currency references rule).
 
-`min_collateral_ratio` is the effective floor a counterparty's request
-must meet at current oracle price for the offer to be considered a
-match. Convention is `target × (1 - slippage_tolerance)` — e.g., a
-lender wanting 2.0× coverage with 1% slippage tolerance publishes
-`1.98`. UI layers may decompose this into "target + tolerance" inputs
-for ergonomics; the wire format stays a single number.
+`max_principal_vrsc` is the offer's lending cap, denominated in VRSC.
+A request's principal converts to VRSC at current oracle price; if
+the converted value exceeds this cap, the offer doesn't apply. Using
+a single VRSC-denominated number lets one offer cover many lending
+currencies without per-currency bookkeeping.
+
+`lend_currencies` is the set of currencies the lender will issue.
+The borrower's principal currency MUST be in this set. The lender
+funds the loan from their own wallet — they must actually hold the
+currency they advertise.
+
+`accepted_collateral` is the set of currencies the lender will take
+as collateral. The borrower's collateral currency MUST be in this set.
+
+Legacy offers may carry `max_principal: { currency, amount }` instead.
+Indexers and clients SHOULD translate them by treating that single
+currency as the only entry in `lend_currencies` and converting the
+amount to VRSC via oracle for `max_principal_vrsc`.
+
+`min_collateral_ratio` is the coverage the lender requires from a
+borrower's commitment at current oracle price. It's the value displayed
+to counterparties and the value the borrower's GUI uses when computing
+the suggested collateral amount.
+
+`slippage_pct` (optional, default 1) is the lender's drift tolerance
+for auto-fund acceptance. The auto-fund accept floor is **derived at
+runtime** as `min_collateral_ratio × (1 − slippage_pct/100)` and is
+never serialized into the offer. This keeps the borrower-visible
+ratio honest (2.0 means 2.0) while still letting the lender's
+auto-acceptance tolerate sub-percent oracle drift between request
+and match.
 
 `auto_fund: true` declares the lender's intent to programmatically post
 a `loan.match` for any request that meets the offer's criteria

@@ -54,20 +54,20 @@ OFFER='{
 }'
 HEX=$(echo -n "$OFFER" | python3 -c "import sys; print(sys.stdin.read().encode().hex())")
 
-# Get the VDXF id for vrsc::contract.option.offer
-verus getvdxfid "vrsc::contract.option.offer"
-# Returns: {"vdxfid":"i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY", ...}
+# Get the VDXF id for make.vrsc::contract.option.offer
+verus getvdxfid "make.vrsc::contract.option.offer"
+# Returns: {"vdxfid":"i5L8vkz9xsnM8yEDiXzPbP4Kix3SnJSsv5", ...}
 
 # Write to Bob's VerusID
 verus updateidentity '{
   "name": "bob.writer@",
   "contentmultimap": {
-    "i4a42EUWLvJTHYGW7F8RifY1Rvs5AQGioY": ["'$HEX'"]
+    "i5L8vkz9xsnM8yEDiXzPbP4Kix3SnJSsv5": ["'$HEX'"]
   }
 }'
 ```
 
-The offer is now publicly readable on chain. Buyers find it via direct ID lookup (`getidentity bob.writer@`) or via a chain indexer that scans for `vrsc::contract.option.offer` entries. See [marketplace.md](./marketplace.md).
+The offer is now publicly readable on chain. Buyers find it via direct ID lookup (`getidentity bob.writer@`) or via a chain indexer that scans for `make.vrsc::contract.option.offer` entries. See [marketplace.md](./marketplace.md).
 
 ### Phase 2 — Coordination (vault derivation)
 

@@ -24,10 +24,13 @@ echo "$r" | python3 -c "import sys,json;d=json.load(sys.stdin);print('    txid:'
 echo "  [2/2] vault drain"
 B_WIF=$($VERUS -conf=$CONF dumpprivkey $BORROWER_R)
 L_WIF=$($SSH '/root/verus-cli-v1.2.16/verus -conf=/root/.komodo/VRSC/VRSC.conf dumpprivkey '$LENDER_R)
-VTXID=$($VERUS -conf=$CONF getaddressutxos "{\"addresses\":[\"$VAULT\"]}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d[0]['txid'])")
-VVOUT=$($VERUS -conf=$CONF getaddressutxos "{\"addresses\":[\"$VAULT\"]}" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d[0]['outputIndex'])")
-RAWTX=$($VERUS -conf=$CONF createrawtransaction "[{\"txid\":\"$VTXID\",\"vout\":$VVOUT}]" "{\"$BORROWER_R\":9.9999}")
-PREVTXS="[{\"txid\":\"$VTXID\",\"vout\":$VVOUT,\"scriptPubKey\":\"a9149893267be2fc287683d0485033c8b642dd34641d87\",\"redeemScript\":\"52210356455f1dc2fdcf8d6ab039dff0d38d1b0d53dcc9a315d7a7e0533c96c19237702103d71d1d78a81aceda25f11c1f9b84e42577b01c5f33f7bc8ea3ff6381ae5ab1d752ae\",\"amount\":10}]"
+UTXO_JSON=$($VERUS -conf=$CONF getaddressutxos "{\"addresses\":[\"$VAULT\"]}")
+VTXID=$(echo "$UTXO_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d[0]['txid'])")
+VVOUT=$(echo "$UTXO_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d[0]['outputIndex'])")
+VAMT=$(echo "$UTXO_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(f\"{d[0]['satoshis']/1e8:.8f}\")")
+DRAIN=$(python3 -c "v=float('$VAMT')-0.0001; print(format(v,'.8f'))")
+RAWTX=$($VERUS -conf=$CONF createrawtransaction "[{\"txid\":\"$VTXID\",\"vout\":$VVOUT}]" "{\"$BORROWER_R\":$DRAIN}")
+PREVTXS="[{\"txid\":\"$VTXID\",\"vout\":$VVOUT,\"scriptPubKey\":\"a9149893267be2fc287683d0485033c8b642dd34641d87\",\"redeemScript\":\"52210356455f1dc2fdcf8d6ab039dff0d38d1b0d53dcc9a315d7a7e0533c96c19237702103d71d1d78a81aceda25f11c1f9b84e42577b01c5f33f7bc8ea3ff6381ae5ab1d752ae\",\"amount\":$VAMT}]"
 S1=$($VERUS -conf=$CONF signrawtransaction "$RAWTX" "$PREVTXS" "[\"$L_WIF\"]" | python3 -c 'import sys,json;print(json.load(sys.stdin)["hex"])')
 S2=$($VERUS -conf=$CONF signrawtransaction "$S1" "$PREVTXS" "[\"$B_WIF\"]" | python3 -c 'import sys,json;print(json.load(sys.stdin)["hex"])')
 TX2=$($VERUS -conf=$CONF sendrawtransaction "$S2")

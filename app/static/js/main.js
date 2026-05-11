@@ -36,12 +36,11 @@ function currencyOptions(selected = "VRSC") {
   return CURRENCIES.map((c) => `<option value="${c}"${c === selected ? " selected" : ""}>${c}</option>`).join("");
 }
 
-// VDXF key transition: vrsc::contract.* → vcs::contract.*
-//
 // Canonical VDXF keys, all under the registered standard owner make.VRSC@
 // (iLWvRsiWVCEuFYhCSt2Qba7LxWksrgVerX). Names: make.vrsc::contract.<slug>.
-// Older `vcs::contract.*` and `vrsc::contract.*` entries that exist on chain
-// are deliberately NOT supported — pre-release test data only, no live users.
+// Earlier draft namespaces (`vrsc::contract.*`, `vcs::contract.*`) that
+// exist on chain are deliberately NOT supported — pre-release test data
+// only, no live users.
 const VDXF_LOAN_OFFER    = "iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz"; // make.vrsc::contract.loan.offer
 const VDXF_LOAN_REQUEST  = "iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5"; // make.vrsc::contract.loan.request
 const VDXF_LOAN_MATCH    = "iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U"; // make.vrsc::contract.loan.match

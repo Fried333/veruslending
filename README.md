@@ -162,7 +162,7 @@ See [SPEC.md](./SPEC.md) for the full protocol.
 
 The recipes are written so they can be run from a stock Verus daemon, but the natural home for this protocol is a wallet. The recipes' multi-step ceremonies (origination, cooperative pre-signing, template storage, exercise/repay, expiration) map cleanly onto wallet UX:
 
-- **Posting / browsing offers** → marketplace tab reading VerusID `vrsc::contract.loan.offer` multimap entries (see [marketplace.md](./recipes/marketplace.md) and [SCHEMA.md](./SCHEMA.md) for canonical VDXF ids)
+- **Posting / browsing offers** → marketplace tab reading VerusID `make.vrsc::contract.loan.offer` multimap entries (see [marketplace.md](./recipes/marketplace.md) and [SCHEMA.md](./SCHEMA.md) for canonical VDXF ids)
 - **Origination ceremony** → coordinated via encrypted multimap entries between counterparties
 - **Template storage** → encrypted in user's own VerusID multimap, recoverable from seed
 - **Repay / exercise / claim** → one-click broadcast of pre-signed templates
