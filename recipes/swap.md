@@ -107,7 +107,7 @@ Verus Wallet V2 already supports `makeoffer`/`takeoffer`. The wallet:
 1. UI for posting offers (Maker)
 2. UI for browsing on-chain offers (Taker)
 3. One-click "Take" with auto-fee calculation
-4. Reputation rendering (if maker has VerusID with `loan.history.v1` entries — see [marketplace.md](./marketplace.md))
+4. History rendering (if maker has VerusID with `loan.history.v1` entries — see [marketplace.md](./marketplace.md))
 
 Generic swaps don't need any new wallet code beyond what already exists.
 

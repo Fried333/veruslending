@@ -594,7 +594,7 @@ This is a complete, oracle-free, custodian-free options primitive on Verus today
 
 ### 28. SIGHASH-pre-signed Output 0 to a VerusID i-address
 
-Validates that the protocol's primitive works when the sig-locked Output 0 is a VerusID i-address (not just an R-address). Important because lender/borrower may want loan payments to land at their VerusID's i-address (so the multimap reputation system in §13 sees activity at that ID).
+Validates that the protocol's primitive works when the sig-locked Output 0 is a VerusID i-address (not just an R-address). Important because lender/borrower may want loan payments to land at their VerusID's i-address (so the multimap trade history system in §13 sees activity at that ID).
 
 **Setup:**
 - Pre-existing VerusID: `i65fv1p21V6UeXMcCsE4HmQPxHo8usUKCV` (single-primary, controlled via RKirf)
@@ -615,9 +615,9 @@ Validates that the protocol's primitive works when the sig-locked Output 0 is a 
 - ✅ Output 0 sig-lock works when recipient is a VerusID i-address (cryptocondition output type)
 - ✅ Verus's signrawtransaction handles SIGHASH_SINGLE|ANYONECANPAY identically for R-address and i-address recipients
 - ✅ Wallets can sig-lock payments to a VerusID without changing the protocol
-- ✅ Enables the §13 reputation flow where loan outcomes credit the parties' VerusIDs directly
+- ✅ Enables the §13 trade history flow where loan outcomes credit the parties' VerusIDs directly
 
-This unlocks the recommended Profile L vault + Profile-V parties configuration (§2.4): the vault is a cheap p2sh, but loan payments flow to/from the parties' personal VerusIDs, where reputation accumulates.
+This unlocks the recommended Profile L vault + Profile-V parties configuration (§2.4): the vault is a cheap p2sh, but loan payments flow to/from the parties' personal VerusIDs, where trade history accumulates.
 
 ### 29. B4: Tx-Repay rejected after Tx-B broadcast (symmetric to A4)
 
@@ -800,7 +800,7 @@ Demonstrates that the **chain itself is the marketplace**. A loan offer is a `lo
 
 The protocol doesn't need a marketplace operator. The **explorer's role is rendering, not gatekeeping** — every wallet can implement its own discovery/filtering on top of the same chain data. Any explorer, marketplace, or wallet can show the same set of offers because they're all reading from the same chain.
 
-Combined with §13 (reputation) and §13.1 (encrypted multimap), the protocol's full lifecycle — discovery, ceremony coordination, settlement, reputation — runs entirely on chain. No off-chain infrastructure required.
+Combined with §13 (trade history) and §13.1 (encrypted multimap), the protocol's full lifecycle — discovery, ceremony coordination, settlement, trade history — runs entirely on chain. No off-chain infrastructure required.
 
 ### 34. Cross-currency `makeoffer`/`takeoffer` validated for pure-CLI atomic swap
 

@@ -5020,7 +5020,7 @@ async function enrichActiveLoanBalances() {
       btn.textContent = "Broadcasting Tx-Repay…";
       const repayBroadcastTxid = await rpc("sendrawtransaction", [signed.hex]);
 
-      // Post loan.history (settled = repaid) on borrower's identity for credit-score
+      // Post loan.history (settled = repaid) on borrower's identity for trade-history
       btn.textContent = "Posting loan.history (settled)…";
       const VDXF_LOAN_HISTORY = "i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW";
       const historyPayload = {
@@ -5065,7 +5065,7 @@ async function enrichActiveLoanBalances() {
       // Always overwrite to size 1 — the live multimap holds the most-recent
       // settlement event as a public beacon. Older entries persist forever in
       // prior identity revisions (getidentityhistory) and the local cache
-      // (~/.verus_contract_gui/history_cache.json), so reputation queries
+      // (~/.verus_contract_gui/history_cache.json), so trade history queries
       // still return the full history. Keeps the per-key blob under Verus's
       // script-element cap (TESTING.md §37) regardless of trade volume.
       newCm[VDXF_LOAN_HISTORY] = [historyHex];

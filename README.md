@@ -8,7 +8,7 @@ No smart-contract bytecode. No arbiter. No oracle. No liquidation bot. Just pre-
 
 ## Primitives
 
-All settle via `SIGHASH_SINGLE|ANYONECANPAY` pre-signed transactions; all marketplace + reputation data lives on VerusID `contentmultimap` entries.
+All settle via `SIGHASH_SINGLE|ANYONECANPAY` pre-signed transactions; all marketplace + settlement history data lives on VerusID `contentmultimap` entries.
 
 - **Loan** — borrower locks collateral in a 2-of-2 P2SH vault, holds a pre-signed `Tx-Repay` (broadcast any time during the loan), lender holds a pre-signed `Tx-B` (broadcast after maturity if borrower defaults). Lender stonewalling is structurally impossible — no live cooperation needed at settle.
 - **Option** — premium-paid, atomic exercise or expiry-recovery.
@@ -29,11 +29,11 @@ e.g. `make.vrsc::contract.loan.offer`, `make.vrsc::contract.option.exercise`. Se
 
 Just a Verus daemon. Your daemon is mempool-aware (`getidentity <iaddr> -1`), P2P propagates between counterparties in ~5s, no 3rd-party RPC required for active-loan ops. A public block explorer (e.g. [scan.verus.cx](https://scan.verus.cx)) is a convenience for stranger-discovery — browsing offers from parties you haven't met yet — but not load-bearing for any active loan, repay, settle, or recovery flow.
 
-Reputation is chain-derived: past `loan.history` attestations name counterparties, so a settled loan shows up on both parties' reputation views regardless of which one wrote the attestation. No central scorer, no GUI dependency.
+Trade history is chain-derived: past `loan.history` attestations name counterparties, so a settled loan shows up on both parties' history views regardless of which one wrote the attestation. No central scorer, no GUI dependency.
 
 ## In one paragraph (deeper)
 
-Make Protocol is built from existing Verus features: **P2SH 2-of-2 multisig** (no identity registration required for the cryptographic core), atomic raw transactions, and pre-signed time-locked transactions using `SIGHASH_SINGLE|ANYONECANPAY`. At origination, both parties cooperatively create a vault holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Subjective disputes go to real-world courts with the chain record as admissible evidence. VerusIDs are not required for the cryptographic protocol but provide the marketplace data layer (offer discovery + on-chain reputation) for unknown-party flows.
+Make Protocol is built from existing Verus features: **P2SH 2-of-2 multisig** (no identity registration required for the cryptographic core), atomic raw transactions, and pre-signed time-locked transactions using `SIGHASH_SINGLE|ANYONECANPAY`. At origination, both parties cooperatively create a vault holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Subjective disputes go to real-world courts with the chain record as admissible evidence. VerusIDs are not required for the cryptographic protocol but provide the marketplace data layer (offer discovery + on-chain trade history) for unknown-party flows.
 
 ## What's here
 
@@ -99,7 +99,7 @@ The protocol is intentionally minimal:
 ## Use cases
 
 - Peer-to-peer collateralized loans between any two parties — pseudonymous via VerusIDs, fully private via R-addresses
-- Reputation-scored marketplace lending: lenders post offers to their VerusID multimap; borrowers filter by on-chain history (`loan.history.v1`)
+- History-filtered marketplace lending: lenders post offers to their VerusID multimap; borrowers filter by on-chain history (`loan.history.v1`)
 - Cross-currency loans (e.g. VRSC collateral, DAI principal) — any currency Verus's currency layer supports
 - Collateralized lending within communities (members lending to other members under a shared parent ID convention)
 - Private loans between businesses or individuals who already know each other

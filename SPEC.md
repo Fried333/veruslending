@@ -4,7 +4,7 @@
 **Date:** 2026-05
 **Target chain:** Verus (VRSC), version ≥ 1.2.16
 
-A peer-to-peer collateralized credit protocol composed entirely from existing Verus primitives. No new opcodes, no consensus changes, no protocol token. The full lifecycle — discovery, ceremony coordination, origination, settlement, default, rescue, reputation tracking — runs on chain via a small set of pre-signed transactions plus VerusID contentmultimap as the data layer. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all phases.
+A peer-to-peer collateralized credit protocol composed entirely from existing Verus primitives. No new opcodes, no consensus changes, no protocol token. The full lifecycle — discovery, ceremony coordination, origination, settlement, default, rescue, outcome tracking — runs on chain via a small set of pre-signed transactions plus VerusID contentmultimap as the data layer. Two private parties enter a binding loan agreement on chain, with cryptographic enforcement of all phases.
 
 ---
 
@@ -22,14 +22,14 @@ A peer-to-peer collateralized credit protocol composed entirely from existing Ve
 
 **Part II — Data layer**
 9. [Marketplace via contentmultimap](#9-marketplace-via-contentmultimap)
-10. [Reputation and credit history](#10-reputation-and-credit-history)
+10. [Settlement attestation and trade history](#10-settlement-attestation-and-trade-history)
 11. [Encrypted coordination](#11-encrypted-coordination)
 12. [VDXF schema registry](#12-vdxf-schema-registry)
 
 **Part III — Implementation guidance**
 13. [Wallet UX requirements](#13-wallet-ux-requirements)
 14. [Profile choice in practice](#14-profile-choice-in-practice)
-15. [Sybil defenses](#15-sybil-defenses)
+15. [Sybil-resistance signals](#15-sybil-resistance-signals)
 
 **Part IV — Reference**
 16. [Validated primitives](#16-validated-primitives)
@@ -56,7 +56,7 @@ A peer-to-peer collateralized credit protocol composed entirely from existing Ve
 - Time-based default with no live cooperation required
 - Reorg-safe by construction (pre-signed txs don't depend on chain state)
 - Survives single-party key loss (rescue path)
-- Marketplace, reputation, and ceremony all on chain (no off-chain server required)
+- Marketplace, trade history, and ceremony all on chain (no off-chain server required)
 - Works with existing Verus primitives — no new RPCs or consensus rules
 
 ### Non-goals
@@ -83,9 +83,9 @@ A peer-to-peer collateralized credit protocol composed entirely from existing Ve
 The protocol has two independent identity choices:
 
 1. **The vault** — the address holding collateral. Can be a 2-of-2 p2sh script hash (Profile L, no VerusID) or a 2-of-2 VerusID i-address (Profile V, with naming + multimap).
-2. **The parties** — the borrower and lender as actors. Can be plain R-addresses (anonymous) or VerusIDs (with reputation/credit-identity layer).
+2. **The parties** — the borrower and lender as actors. Can be plain R-addresses (anonymous) or VerusIDs (with trade-history layer).
 
-These are independent. The recommended configuration for an active lending market is **p2sh vault + party VerusIDs**: cheapest possible vault (zero registration cost), full reputation/multimap features for the parties (see Part II).
+These are independent. The recommended configuration for an active lending market is **p2sh vault + party VerusIDs**: cheapest possible vault (zero registration cost), full history/multimap features for the parties (see Part II).
 
 ---
 
@@ -127,7 +127,7 @@ Vault address is the VerusID's i-address (e.g. `i7b7Tq8JYXX9iqS7FBevC6LaG3ioh8z3
 - Human-readable name (`loan-XXXX.parent@`)
 - On-chain encrypted multimap entries on the loan itself
 - Support for non-VRSC collateral (validated §32)
-- Reputation hooks tied to the loan id
+- History hooks tied to the loan id
 
 **Authority semantics (Profile V only):**
 - **Primary (2-of-2)**: both parties must cosign any normal `updateidentity` action
@@ -546,7 +546,7 @@ The spec defines the schema but does not mandate a discovery mechanism. **Patter
 
 ---
 
-## 10. Reputation and credit history
+## 10. Settlement attestation and trade history
 
 For an active lending market — where strangers want to evaluate counterparties and price risk — VerusIDs enable an on-chain credit-identity layer.
 
@@ -595,7 +595,17 @@ When a future counterparty Charlie evaluates Bob's history:
 
 ### The credit graph
 
-Once enough loans accumulate, the chain hosts a public credit graph: who has lent to whom, when, in what amounts, with what outcomes. Anyone can compute scoring functions over this graph. **No canonical scoring authority.** Multiple wallets/explorers can implement different scoring algorithms; users can choose which to trust.
+Once enough loans accumulate, the chain hosts a public trade-history graph: who has lent to whom, when, in what amounts, with what outcomes. Indexers and wallet UIs surface the raw counts; the protocol takes no position on weighting. Useful per-VerusID metrics that are *directly derivable* from `loan.history` entries:
+
+- **Completed trades** — count of entries with `outcome: "repaid"`
+- **Defaults** — count with `outcome: "defaulted"`
+- **Default rate** — `defaults / (completed + defaults)`
+- **Average interest** — mean of `rate` across completed loans
+- **Average duration** — mean of `term_days` across completed loans
+- **Tenure** — block-height span from first to most-recent attestation
+- **Counterparty count** — unique counterparty iaddrs across all entries
+
+Anything beyond these (composite scores, rankings, gating thresholds) lives in client/indexer code — never in the protocol payload.
 
 This shifts the practical envelope of the protocol from "private agreements between known parties" to "permissionless capital market with cryptographic credit identity."
 
@@ -660,7 +670,7 @@ The canonical key set is namespaced under `make.vrsc::contract.<usecase>.<entity
 | `make.vrsc::contract.loan.request`   | `iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5` | Borrower's request | public |
 | `make.vrsc::contract.loan.match`     | `iKVShS5o56BLn8BpysrmfvUJbWCrgyio8U` | Lender's pre-signed funding offer for a specific request | public |
 | `make.vrsc::contract.loan.status`    | `iRzM96sNYj95mUiJebzBnFwirjfws2q6o4` | Active loan state | public |
-| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | Settled outcome attestation (reputation source) | public |
+| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | Settled outcome attestation (history record) | public |
 | `make.vrsc::contract.loan.decline`   | `iEgciB3u2GwTxzShQR4eFhtj4k8Zv6frNb` | Lender's "polite no" to a request | public |
 
 VDXF ids above are deterministic — re-derive at any time via `verus getvdxfid "<key>"`.
@@ -682,8 +692,8 @@ Each multimap entry value is a hex-encoded payload (`hex(utf8(JSON.stringify(pay
 A reference wallet implementation should provide:
 
 1. **Marketplace browsing** — query VerusIDs for `make.vrsc::contract.loan.offer` and `make.vrsc::contract.loan.request` entries; render as a filterable list.
-2. **Reputation aggregation** — for any candidate counterparty, fetch their `make.vrsc::contract.loan.history` entries and compute a summary (count, default rate, tenure, counterparty diversity).
-3. **Reputation gating** — let the user set thresholds (max default rate, min tenure, min loans). Hide or warn on offers below threshold.
+2. **Trade-history summary** — for any candidate counterparty, fetch their `make.vrsc::contract.loan.history` entries and compute a summary (count, default rate, tenure, counterparty diversity).
+3. **History-based filtering** — let the user set thresholds (max default rate, min tenure, min loans). Hide or warn on offers below threshold.
 4. **Origination ceremony coordinator** — handle the multi-step signing dance via encrypted multimap writes; expose simple "Accept offer" UX.
 5. **Encrypted hex storage** — write pre-signed templates to user's own multimap as durable backup.
 6. **Settlement helper** — at user's request, retrieve template, attach funding inputs, sign with `SIGHASH_ALL`, broadcast.
@@ -732,27 +742,27 @@ Use `signrawtransaction <hex> null null <flags>` for cryptocondition reserve-cur
 
 | Vault | Borrower's identity | Lender's identity | What you get |
 |---|---|---|---|
-| p2sh (L) | R-address | R-address | Cheapest. Fully anonymous. No reputation. |
-| p2sh (L) | VerusID | VerusID | **Recommended for active markets** — cheap vault + reputation/multimap features for both parties |
+| p2sh (L) | R-address | R-address | Cheapest. Fully anonymous. No on-chain history. |
+| p2sh (L) | VerusID | VerusID | **Recommended for active markets** — cheap vault + history/multimap features for both parties |
 | VerusID (V) | VerusID | VerusID | Maximum on-chain context (loan also has its own multimap entries) |
 | VerusID (V) | R-address | R-address | Possible but unusual — VerusID adds little if neither party has one |
 
-The recommended default is **p2sh vault + party VerusIDs**: zero per-loan registration cost, full reputation/multimap features. Profile V vaults are reserved for cases where the loan itself benefits from being a named on-chain entity (lending desks, branded products, syndicated loans).
+The recommended default is **p2sh vault + party VerusIDs**: zero per-loan registration cost, full history/multimap features. Profile V vaults are reserved for cases where the loan itself benefits from being a named on-chain entity (lending desks, branded products, syndicated loans).
 
 ---
 
-## 15. Sybil defenses
+## 15. Sybil-resistance signals
 
-Reputation is gameable by registering many VerusIDs and faking history. The following heuristics raise the cost of attack and should be implemented in scoring algorithms:
+Trade history is gameable by registering many VerusIDs and faking past loans. The protocol takes no position on how to weight any of this — it only writes the raw `loan.history` attestations to chain. Indexers and wallet UIs surface the signals; users decide what to trust. Useful signals derivable directly from chain data:
 
-- **Tenure weighting**: a 6-month-old ID weighs more than a 6-day-old one.
-- **Counterparty diversity**: 100 loans to 100 different counterparties weighs much more than 100 loans to 3 counterparties (anti-cycling).
-- **Stake weighting**: a single $10k loan with clean settlement weighs more than 100 $1 loans.
-- **Graph cluster analysis**: the credit graph is public; cycles and clusters of mutual transactions are detectable.
-- **Tenure mismatch**: 100 IDs registered in the same week is suspicious.
-- **Collateral source tracing**: if a counterparty's collateral originated from the candidate's main address, that's a fingerprint.
+- **Tenure**: how old the VerusID is (block-of-first-revision).
+- **Counterparty count + diversity**: 100 loans across 100 unique counterparties vs 100 loans across 3 counterparties.
+- **Stake size**: total principal handled, not just count.
+- **Graph clusters**: the loan graph is public — cycles and tight clusters of mutual loans are visible to anyone walking it.
+- **Cohort registration**: many IDs registered in the same window are visible from the chain registration history.
+- **Collateral source**: if a counterparty's collateral originated from a candidate's main address, it's traceable on chain.
 
-These are scoring heuristics, not protocol-level rules. Different wallets can implement different aggressiveness; users choose which scoring they trust.
+These are observational signals — protocol layer publishes the attestations, doesn't score them. Anything beyond display (rankings, gating, default-rate composites) lives in client/indexer code.
 
 ---
 
@@ -801,12 +811,12 @@ Each item below was directly tested on Verus mainnet. See [TESTING.md](./TESTING
 - **Provide instant on-chain dispute resolution**. Pre-signed transactions cover the main cases; subjective disputes go to real-world courts.
 - **Support variable-rate or amortizing loans**. Output 0 of each settlement tx is signed-locked at origination. Variable terms require re-signing.
 - **Allow joint mid-loan cancellation without re-signing**. There's no protocol-level "abandon" path — parties either cooperate to re-sign or wait for default/Tx-C.
-- **Enforce reputation honesty**. Any party can refuse to attest the outcome on their own multimap. Counterparties verify against on-chain truth (the actual settlement tx); absence of a counterparty entry is itself a signal.
+- **Enforce attestation honesty**. Any party can refuse to attest the outcome on their own multimap. Counterparties verify against on-chain truth (the actual settlement tx); absence of a counterparty entry is itself a signal.
 
 ### What requires off-chain trust
 
-- **Identifying the counterparty initially** — but reputation reduces this once track records exist
-- **Pricing the loan correctly** — counterparties agree off-chain; reputation informs but doesn't dictate
+- **Identifying the counterparty initially** — but trade history reduces this once track records exist
+- **Pricing the loan correctly** — counterparties agree off-chain; history informs but doesn't dictate
 - **Subjective disputes** — real-world legal action, with chain evidence
 
 ### Untested aspects (conservative assumptions)
@@ -814,7 +824,7 @@ Each item below was directly tested on Verus mainnet. See [TESTING.md](./TESTING
 - Behavior under deep chain reorganizations (>10 blocks; reorg-safety reasoned in §7)
 - Cross-chain loan denominations involving Verus PBaaS bridges
 - Performance characteristics of marketplace browsing at large scale (tens of thousands of active offers)
-- Sybil-attack resistance of specific scoring algorithms (these are application-level, not protocol)
+- Sybil-attack resistance of specific aggregation methods (these are application-level, not protocol)
 
 ---
 
@@ -824,8 +834,8 @@ Each item below was directly tested on Verus mainnet. See [TESTING.md](./TESTING
 |---|---|---|---|
 | Reference wallet implementation (handles ceremony + storage + UX) | **P0** | medium | spec stable |
 | VDXF schema canonicalization (formal registry) | P1 | small | none |
-| Marketplace explorer (aggregates offers/requests + reputation rendering) | P1 | medium | wallet basics |
-| Reputation scoring algorithms (multiple competing approaches) | P1 | medium | history schema |
+| Marketplace explorer (aggregates offers/requests + history rendering) | P1 | medium | wallet basics |
+| Indexer-side trade-history aggregators (multiple competing approaches) | P1 | medium | history schema |
 | Encrypted-multimap ceremony coordinator | P2 | medium | wallet basics |
 | Browser-based offer board (no desktop wallet required) | P2 | medium | wallet API |
 | Variable-rate / amortizing loan support (via re-signing protocol) | P3 | medium | spec extension |

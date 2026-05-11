@@ -53,6 +53,6 @@ Both work. Manual mode shows you exactly what's happening; wrapped mode is faste
 
 ## Trust model
 
-All recipes operate on the principle that **chain-level enforcement beats off-chain trust**. Where a recipe says "no trust required," that means cryptographic enforcement covers the relevant scenario. Where it says "trust required," reputation or off-chain agreement is the only protection.
+All recipes operate on the principle that **chain-level enforcement beats off-chain trust**. Where a recipe says "no trust required," that means cryptographic enforcement covers the relevant scenario. Where it says "trust required," trade history or off-chain agreement is the only protection.
 
 The recipes are explicit about which is which. Don't run a recipe without reading its security section.

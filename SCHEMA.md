@@ -223,7 +223,7 @@ a `loan.match` for any request that meets the offer's criteria
 Reference client (`make-gui`) runs the watcher inside the lender's
 browser; the wallet stays unlocked and signs locally — no key custody.
 Auto-fund is opt-in client behavior, not a protocol-level guarantee:
-indexers and reputation systems MUST treat auto-funded matches
+indexers and indexers and history aggregators MUST treat auto-funded matches
 identically to manually-posted ones.
 
 ### `contract.loan.request` — borrower posts a specific request
@@ -342,7 +342,7 @@ indexers can derive outcome.
 ### `contract.loan.history` — outcome attestation
 
 Both parties write at settlement. Truth is the on-chain settlement tx;
-this is just an indexable summary for reputation.
+this is just an indexable summary for trade history.
 
 **Retention.** Verus enforces a per-stack-element cap on `updateidentity`
 payloads (see TESTING.md §37): the per-VDXF-key blob in the *current*
@@ -367,7 +367,7 @@ chain itself, the explorer index, and the local cache.
 No digest, no archive sub-ID needed — the existing cache + chain history
 are sufficient.
 
-**Both parties must write.** Per the symmetry principle, both borrower and lender post their own `loan.history` entry at settlement (see SPEC §10). A counterparty's entry is not authoritative for your reputation. The current GUI implementation only writes on the borrower side at repay-time; the lender-side watcher is open work.
+**Both parties must write.** Per the symmetry principle, both borrower and lender post their own `loan.history` entry at settlement (see SPEC §10). A counterparty's entry is not authoritative for your trade history. The current GUI implementation only writes on the borrower side at repay-time; the lender-side watcher is open work.
 
 `request_txid` (v2+) is propagated from `loan.status.request_txid` so
 the history entry joins to the same loan via a single key.

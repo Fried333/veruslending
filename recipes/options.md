@@ -266,7 +266,7 @@ Compare: traditional options markets need a custodian (or smart contract code) t
 
 ### What still requires trust
 
-- Counterparty discovery (use reputation via VerusID multimap; see [marketplace.md](./marketplace.md))
+- Counterparty discovery (use trade history via VerusID multimap; see [marketplace.md](./marketplace.md))
 - Agreeing on terms (premium, strike, expiration) before setup
 - Pricing / market-making — out of scope
 

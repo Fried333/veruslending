@@ -264,7 +264,7 @@ In a Verus Wallet V2 implementation, all of the above is hidden behind UI. The u
 
 The wallet:
 1. Reads VerusID multimaps for `make.vrsc::contract.loan.offer` entries (see [marketplace.md](./marketplace.md))
-2. Renders offers with reputation summary aggregated from `make.vrsc::contract.loan.history` entries
+2. Renders offers with trade history summary aggregated from `make.vrsc::contract.loan.history` entries
 3. On "Accept", coordinates the multi-step ceremony via encrypted multimap entries
 4. Stores templates as encrypted multimap entries on user's own VerusID for seed-recovery
 5. Displays "Repay" button when active; broadcasts Tx-Repay
@@ -293,7 +293,7 @@ All complexity is hidden. User clicks two buttons total.
 
 ### What still requires off-chain trust (or chain-native equivalents)
 
-- **Counterparty discovery** — solved by VerusID multimap + reputation (`make.vrsc::contract.loan.history`)
+- **Counterparty discovery** — solved by VerusID multimap + trade history (`make.vrsc::contract.loan.history`)
 - **Agreeing on terms before origination** — discovery + acceptance handshake covers this
 - **Subjective dispute resolution** — use real-world courts; chain is admissible evidence
 

@@ -24,7 +24,7 @@ Standard VDXF keys for marketplace entries (full registry in [SCHEMA.md](../SCHE
 |---|---|---|
 | `make.vrsc::contract.loan.offer`     | `iMey7Y2idT6dt7jJvRiPXgtYcfAaKCQbHz` | Lender publishes terms |
 | `make.vrsc::contract.loan.request`   | `iF7Ax6QpdwvTTqDJpNzDXVj1GpUSQX6vH5` | Borrower publishes terms |
-| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | Outcome attestations (reputation) |
+| `make.vrsc::contract.loan.history`   | `i5qBwi3KWXfyo1UKuUBC3yyq67JagVennW` | Outcome attestations (trade history) |
 | `make.vrsc::contract.loan.status`    | `iRzM96sNYj95mUiJebzBnFwirjfws2q6o4` | Active loan state |
 | `make.vrsc::contract.loan.accept`    | `iLr7w7k8Ty9tVHccBqzXfAud1wXY1QYsBy` | Borrower's acceptance (encrypted) |
 
@@ -34,7 +34,7 @@ Equivalent keys exist for options / escrow / swap (`make.vrsc::contract.option.o
 
 **Posters** click "Post offer" in their wallet; specify terms; wallet writes the multimap entry.
 
-**Browsers** open the wallet's marketplace tab; see filtered, scored offers from various VerusIDs; click "Accept" to initiate the ceremony with one party.
+**Browsers** open the wallet's marketplace tab; see filtered, offers from various VerusIDs filtered against on-chain trade history; click "Accept" to initiate the ceremony with one party.
 
 In CLI mode: 2 commands — `updateidentity` to post, `getidentity` to read.
 
@@ -114,7 +114,7 @@ That's the marketplace. **Pure stock CLI on both sides.**
 
 ---
 
-## Walkthrough — write reputation history entry
+## Walkthrough — write trade history history entry
 
 After a loan settles, both parties write a history entry to their own multimap. **Asymmetric writes — no co-signing across IDs needed**; the truth is the on-chain settlement tx, the multimap entry is just a queryable index.
 
@@ -145,7 +145,7 @@ Same `updateidentity` flow as above, with VDXF key for `make.vrsc::contract.loan
 ```
 [Marketplace tab]
 
-  Filters: [VRSC ▼] [< 10% rate] [≥ 30d] [reputation ≥ 95%]
+  Filters: [VRSC ▼] [< 10% rate] [≥ 30d] [trade history ≥ 95%]
   
   bob.lender@         5 VRSC for 10 VRSC, 8% / 30d
                       47 settled / 2 defaulted (96%) | tenure 487d
@@ -159,13 +159,13 @@ Same `updateidentity` flow as above, with VDXF key for `make.vrsc::contract.loan
 The wallet:
 1. Queries known/discovered VerusIDs for `make.vrsc::contract.loan.offer` (or `make.vrsc::contract.option.offer`, etc.)
 2. Decodes hex JSON
-3. Aggregates each lender's `make.vrsc::contract.loan.history` entries → reputation summary
+3. Aggregates each lender's `make.vrsc::contract.loan.history` entries → trade history summary
 4. Renders with filtering/sorting
 5. On "Accept", initiates the cooperative ceremony (more multimap writes, encrypted)
 
 For a wallet implementing this, the work is:
 - Write a multimap browser (~50 lines of code per wallet)
-- Implement reputation aggregation (~50 lines)
+- Implement trade-history summary (~50 lines)
 - Reuse existing Verus daemon RPC for read/write
 
 ---
@@ -234,18 +234,18 @@ Recipient decrypts using their identity z-key (derived from their seed).
 
 - ✅ **Posting an offer** — anyone can post; the multimap is permissionless
 - ✅ **Reading an offer** — anyone can read; everything's public
-- ✅ **Writing reputation history** — any party can write to their own multimap; the chain enforces who controls which ID
-- ❌ **Truthful posting** — the multimap doesn't validate that an offer's claims are honest; reputation aggregation is the trust layer
+- ✅ **Writing trade history history** — any party can write to their own multimap; the chain enforces who controls which ID
+- ❌ **Truthful posting** — the multimap doesn't validate that an offer's claims are honest; trade-history summary is the trust layer
 
 ### Anti-spam considerations
 
 - Each multimap write is an `updateidentity` tx — costs tx fees
-- Spam offers exist but can be filtered by reputation
-- Wallets should sort by reputation/freshness, not just by recency
+- Spam offers exist but can be filtered by trade history
+- Wallets should sort by trade history/freshness, not just by recency
 
 ### Sybil defenses
 
-Reputation gaming via fake VerusID networks is possible but observable on chain. See [SPEC §15](../SPEC.md#15-sybil-defenses) for scoring heuristics.
+Trade history gaming via fake VerusID networks is possible but observable on chain. See [SPEC §15](../SPEC.md#15-sybil-resistance-signals) for the observable signals.
 
 ---
 
@@ -253,4 +253,4 @@ Reputation gaming via fake VerusID networks is possible but observable on chain.
 
 - [SPEC.md Part II](../SPEC.md) — full data layer specification
 - [TESTING.md §33](../TESTING.md) — cross-node readability validated
-- [SPEC.md §13](../SPEC.md) — reputation/credit identity layer
+- [SPEC.md §13](../SPEC.md) — trade history/credit identity layer
