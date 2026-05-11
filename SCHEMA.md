@@ -168,15 +168,34 @@ against specific requests they want to fund.
 ```json
 {
   "version": 1,
-  "max_principal":        { "currency": "DAI", "amount": 100 },
-  "accepted_collateral":  ["VRSC", "DAI", "BTC"],
-  "min_collateral_ratio": 2.0,
+  "max_principal":        { "currency": "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM", "amount": 100 },
+  "accepted_collateral":  ["i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV"],
+  "min_collateral_ratio": 1.98,
   "rate":                 0.01,
   "term_days":            30,
+  "auto_fund":            true,
   "active":               true,
   "memo":                 "optional human note"
 }
 ```
+
+Currency fields are i-addresses (see §2 currency references rule).
+
+`min_collateral_ratio` is the effective floor a counterparty's request
+must meet at current oracle price for the offer to be considered a
+match. Convention is `target × (1 - slippage_tolerance)` — e.g., a
+lender wanting 2.0× coverage with 1% slippage tolerance publishes
+`1.98`. UI layers may decompose this into "target + tolerance" inputs
+for ergonomics; the wire format stays a single number.
+
+`auto_fund: true` declares the lender's intent to programmatically post
+a `loan.match` for any request that meets the offer's criteria
+(currency, amount cap, term cap, ratio at current oracle price).
+Reference client (`make-gui`) runs the watcher inside the lender's
+browser; the wallet stays unlocked and signs locally — no key custody.
+Auto-fund is opt-in client behavior, not a protocol-level guarantee:
+indexers and reputation systems MUST treat auto-funded matches
+identically to manually-posted ones.
 
 ### `contract.loan.request` — borrower posts a specific request
 
