@@ -229,7 +229,7 @@ Validated mainnet: §16, §18.
 Template (signed at origination):
   Input 0:       vault collateral UTXO     (signed SIGHASH_SINGLE|ANYONECANPAY by both, via redeem script)
   Output 0:      principal+interest → lender (sig-locked, paired)
-  expiryheight:  maturity_block            (cannot broadcast after deadline)
+  expiryheight:  maturity_block            (invalid at or after this height — last valid block is maturity_block - 1)
 
 Borrower extends at repayment:
   Input 1+:  funding UTXOs (principal+interest currency, plus VRSC for fee)  (signed SIGHASH_ALL)
