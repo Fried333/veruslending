@@ -82,6 +82,33 @@ contentmultimap:
 - Hex (lowercase)
 - One entry per offer/state. Multiple offers per ID = multiple array elements.
 
+### Currency references
+
+All `currency` fields in protocol payloads MUST be Verus **i-addresses**
+(34 chars, starts with `i`, base58). This includes `principal.currency`,
+`collateral.currency`, `repay.currency`, and the elements of
+`accepted_collateral` / `allowed_collateral_currencies`.
+
+Fully-qualified names (`scrvUSD.vETH`, `DAI.vETH`) and the literal
+`VRSC` are display-layer conveniences only; clients MUST resolve them
+to i-addresses (via `getcurrency`) before posting any payload to chain.
+
+Rationale:
+- **Unambiguous on the wire** — `scrvUSD` alone can resolve to multiple
+  different currencies depending on which chain hosts it. The i-address
+  is unique across all PBaaS chains.
+- **Rename-resistant** — chain renames are possible at the friendly-name
+  level; i-addresses are immutable. A scammer can't impersonate
+  `scrvUSD.vETH` by registering a token with the same friendly name.
+- **Comparison-safe for auto-fund/auto-accept matchers** — byte equality
+  on i-address is the only safe equality check.
+
+Readers SHOULD tolerate legacy entries containing FQN/bare strings (flag
+as `currency_format: "legacy"` and exclude from auto-* eligibility), but
+writers MUST enforce the i-address rule going forward. Display layers
+look up the FQN via `getcurrency` for human rendering; the raw i-address
+is shown as a fallback if the lookup fails.
+
 ### Encrypted entries
 
 For `*.accept` and `*.template` keys:
