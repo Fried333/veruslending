@@ -736,9 +736,35 @@ A small Verus core RPC enhancement (`extendrawtransaction`, `cosignoffer`, or `m
 
 Use `signrawtransaction <hex> null null <flags>` for cryptocondition reserve-currency inputs. The explicit-key path (`[] ["<priv>"]`) fails with `Opcode missing or not understood`. See §3.4 and TESTING §32.
 
----
+### Critical implementation note: 2-of-2 partial-sig merge with reserve-currency outputs
 
-## 14. Profile choice in practice
+When the borrower's `Tx-Repay` (or `Tx-B`) commits to a **reserve-currency cryptocondition output** under `SIGHASH_SINGLE|ANYONECANPAY` — i.e., any loan denominated in something other than native VRSC — Verus's `signrawtransaction` does **not** correctly merge the lender's pre-signed slot-1 sig with the borrower's freshly-computed slot-2 sig. Verified empirically (same prevout / same redeem / same amount / same daemons; only the output type differs):
+
+| Output type | Behavior |
+|---|---|
+| Native VRSC P2PKH | `signrawtransaction` correctly merges → `complete: true`, 4-element scriptSig |
+| Reserve-currency cryptocondition | `CombineMultisig.CheckSig` rejects the lender's slot-1 sig → discarded → only borrower's sig (in slot 1, slot 2 empty) |
+
+Root cause is in `script/sign.cpp::CombineMultisig` (line 924): `checker.CheckSig(lenderSig, lenderPubkey, redeem, branchId)` returns false because the cryptocondition output's serialized form hashes differently between the lender's signing path and the borrower's verification path. The two daemons compute different `hashOutputs` for the same output bytes — likely a non-deterministic cryptocondition serializer or a code-path divergence between sign and verify.
+
+**Reference client workaround** (`make-gui::_addBorrowerSigToPartial`): extract the lender's slot-1 sig deterministically in JS, run `signrawtransaction` purely to obtain the borrower's sig bytes, then manually compose the final scriptSig `OP_0 sig_lender sig_borrower redeem` and patch it into the partial. Round-trip parse validates the merged scriptSig before broadcast.
+
+This is **not** a protocol issue — the pre-signed transactions and the on-chain bytes are correct. It's a daemon-side `signrawtransaction` merge bug specific to V4 sighash + reserve-currency outputs. Reportable upstream; reproducer below.
+
+#### Reproducer (3-line bash)
+
+```bash
+# Build a fresh 2-of-2 multisig, sign chained with SIGHASH_SINGLE|ANYONECANPAY.
+# Same prevout in both invocations; only the output type varies.
+
+# (A) Native VRSC P2PKH output → succeeds, 4-element scriptSig, complete: true.
+verus signrawtransaction $RAW '[{"txid":"...","vout":0,"scriptPubKey":"<P2SH>","redeemScript":"<2of2>","amount":1.0}]' '["<lender WIF>"]' "SINGLE|ANYONECANPAY"
+verus signrawtransaction $RESULT_A '[<same prevtxs>]' '["<borrower WIF>"]' "SINGLE|ANYONECANPAY"
+
+# (B) Reserve-currency cryptocondition output (built via sendcurrency / createrawtransaction with reserve currency) → fails.
+# Borrower's signrawtransaction returns complete: false with scriptSig = OP_0 push(borrowerSig) OP_0 push(redeem),
+# lender's pre-existing slot-1 sig dropped.
+```
 
 | Vault | Borrower's identity | Lender's identity | What you get |
 |---|---|---|---|
