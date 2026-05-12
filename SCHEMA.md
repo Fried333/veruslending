@@ -174,7 +174,6 @@ against specific requests they want to fund.
   "accepted_collateral":  ["i5w5MuNik5NtLcYmNzcvaoixooEebB6MGV",
                             "iGBs4DWztRNvNEJBt4mqHszLxfKTNHTkhM"],
   "min_collateral_ratio": 2.0,
-  "slippage_pct":         1,
   "rate":                 0.01,
   "term_days":            30,
   "auto_fund":            true,
@@ -209,13 +208,14 @@ borrower's commitment at current oracle price. It's the value displayed
 to counterparties and the value the borrower's GUI uses when computing
 the suggested collateral amount.
 
-`slippage_pct` (optional, default 1) is the lender's drift tolerance
-for auto-fund acceptance. The auto-fund accept floor is **derived at
-runtime** as `min_collateral_ratio × (1 − slippage_pct/100)` and is
-never serialized into the offer. This keeps the borrower-visible
-ratio honest (2.0 means 2.0) while still letting the lender's
-auto-acceptance tolerate sub-percent oracle drift between request
-and match.
+**Note on auto-fund drift tolerance**: a lender wallet running an
+auto-fund watcher may choose to accept a slightly lower ratio than
+`min_collateral_ratio` to absorb oracle drift between request post
+and match broadcast. That tolerance is a **local wallet preference**
+(default 1%) — not part of the offer payload, not on chain, not shown
+to counterparties. It changes only how strict the lender's own
+auto-fund watcher is about firing; the on-chain commitment remains
+`min_collateral_ratio`.
 
 `auto_fund: true` declares the lender's intent to programmatically post
 a `loan.match` for any request that meets the offer's criteria
