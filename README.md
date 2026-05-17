@@ -6,6 +6,26 @@ No smart-contract bytecode. No arbiter. No oracle. No liquidation bot. Just pre-
 
 ![Make Protocol Lifecycle](https://raw.githubusercontent.com/Fried333/make-protocol/main/diagram.svg)
 
+## Table of contents
+
+- [Primitives](#primitives)
+- [VDXF namespace](#vdxf-namespace)
+- [How it runs](#how-it-runs)
+- [In one paragraph (deeper)](#in-one-paragraph-deeper)
+- [What's in this repo](#whats-in-this-repo)
+- [Reference clients](#reference-clients)
+- [Status](#status)
+- [Architecture summary](#architecture-summary)
+- [Use cases](#use-cases)
+- [What it is NOT for](#what-it-is-not-for)
+- [Wallet integration](#wallet-integration)
+- [Why it matters](#why-it-matters)
+- [Relationship to other Verus lending efforts](#relationship-to-other-verus-lending-efforts)
+- [Contributing](#contributing)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
+- [Disclaimer](#disclaimer)
+
 ## Primitives
 
 All settle via `SIGHASH_SINGLE|ANYONECANPAY` pre-signed transactions; all marketplace + settlement history data lives on VerusID `contentmultimap` entries.
@@ -35,21 +55,21 @@ Trade history is chain-derived: past `loan.history` attestations name counterpar
 
 Make Protocol is built from existing Verus features: **P2SH 2-of-2 multisig** (no identity registration required for the cryptographic core), atomic raw transactions, and pre-signed time-locked transactions using `SIGHASH_SINGLE|ANYONECANPAY`. At origination, both parties cooperatively create a vault holding the borrower's collateral, plus three pre-signed transactions: one for the borrower's atomic repayment (held privately by the borrower, broadcast unilaterally at any time during the loan term), one for the lender's default-claim at maturity+grace, and one optional last-resort rescue. The lender's pre-commitment at origination is irrevocable — the borrower can settle without any live cooperation from the lender. Subjective disputes go to real-world courts with the chain record as admissible evidence. VerusIDs are not required for the cryptographic protocol but provide the marketplace data layer (offer discovery + on-chain trade history) for unknown-party flows.
 
-## What's here
+## What's in this repo
 
-- **[SPEC.md](./SPEC.md)** — formal protocol specification (v1.0)
-- **[TESTING.md](./TESTING.md)** — empirical test results from Verus mainnet (txid references)
-- **[SCHEMA.md](./SCHEMA.md)** — canonical chain data layer (VDXF keys, payload schemas, indexer API spec)
-- **[recipes/](./recipes/)** — practical how-to guides per use case (lending, options, swap, escrow, marketplace)
-- **[helpers/](./helpers/)** — short Python utilities supporting the recipes
-- **[BRIEF.md](./BRIEF.md)** — single-page summary
-- **[SCENARIOS.md](./SCENARIOS.md)** — full scenario test matrix
-- **[diagram.svg](./diagram.svg)** — protocol lifecycle diagram
-- **[LICENSE](./LICENSE)** — MIT
+| File | Purpose |
+|---|---|
+| **[SPEC.md](./SPEC.md)** | Formal protocol specification (v1.0) — the source of truth |
+| **[SCHEMA.md](./SCHEMA.md)** | Canonical chain data layer — VDXF keys, payload schemas, indexer API spec |
+| **[BRIEF.md](./BRIEF.md)** | Single-page summary for quick reading |
+| **[TESTING.md](./TESTING.md)** | Empirical mainnet test results with txid references |
+| **[SCENARIOS.md](./SCENARIOS.md)** | Full scenario test matrix |
+| **[recipes/](./recipes/)** | Practical how-to guides per use case (lending, options, swap, escrow, marketplace) |
+| **[helpers/](./helpers/)** | Short Python utilities supporting the recipes |
+| **[diagram.svg](./diagram.svg)** | Protocol lifecycle diagram |
+| **[LICENSE](./LICENSE)** | MIT |
 
-## Reference clients
-
-- **[verus_contract_gui](https://github.com/Fried333/verus_contract_gui)** — local web app (Python + vanilla JS, no install) that browses and acts on this protocol against your own `verusd`. Reads/writes the VDXF keys and payload schemas defined in [SCHEMA.md](./SCHEMA.md). Anyone can fork or replace it — the chain is the source of truth, not any one client.
+### Per-use-case recipes
 
 The same primitive (SIGHASH_SINGLE|ANYONECANPAY pre-commit) supports multiple use cases:
 
@@ -60,6 +80,10 @@ The same primitive (SIGHASH_SINGLE|ANYONECANPAY pre-commit) supports multiple us
 | Atomic p2p currency swaps | [recipes/swap.md](./recipes/swap.md) | ✅ pure CLI |
 | Escrow (time-locked, multi-party) | [recipes/escrow.md](./recipes/escrow.md) | depends on pattern |
 | Marketplace data layer | [recipes/marketplace.md](./recipes/marketplace.md) | ✅ pure CLI |
+
+## Reference clients
+
+- **[make-gui](https://github.com/Fried333/make-gui)** — local web app (Python stdlib + vanilla JS, no install) that browses and acts on this protocol against your own `verusd`. Reads/writes the VDXF keys and payload schemas in [SCHEMA.md](./SCHEMA.md). Anyone can fork or replace it — the chain is the source of truth, not any one client.
 
 ## Status
 
@@ -82,34 +106,6 @@ The same primitive (SIGHASH_SINGLE|ANYONECANPAY pre-commit) supports multiple us
 | Front-run protection (no offer ever in mempool) | ✅ structural |
 
 See [TESTING.md](./TESTING.md) for txid references and [SCENARIOS.md](./SCENARIOS.md) for the full scenario test matrix.
-
-## Why it matters
-
-This is what private secured lending looked like before banks: two parties, a notarized agreement, time-based defaults. Existing crypto lending products that work today (Ledn, Unchained, Arch) re-create that model with corporate operators. The Make Protocol re-creates it with cryptographic enforcement instead — the chain is the notary, the parties are themselves, and the lender's commitment is enforced by signature mechanics rather than by external accountability.
-
-The protocol is intentionally minimal:
-
-- No on-chain dispute resolution (use courts; chain provides evidence)
-- No oracle dependency (no margin calls, no liquidation bots)
-- No protocol-controlled treasury or fee
-- No DAO governance
-- No proprietary token
-- No panic button or recovery authority — the protocol does exactly three things: settle, default, or rescue
-
-## Use cases
-
-- Peer-to-peer collateralized loans between any two parties — pseudonymous via VerusIDs, fully private via R-addresses
-- History-filtered marketplace lending: lenders post offers to their VerusID multimap; borrowers filter by on-chain history (`loan.history.v1`)
-- Cross-currency loans (e.g. VRSC collateral, DAI principal) — any currency Verus's currency layer supports
-- Collateralized lending within communities (members lending to other members under a shared parent ID convention)
-- Private loans between businesses or individuals who already know each other
-
-## What it is NOT for
-
-- High-frequency margin trading
-- Variable-rate or amortizing loans (pre-signed Tx-Repay output amounts are fixed at origination)
-- Loans where parties may want to renegotiate or abandon mid-term without cooperation
-- Custodial lending platforms with retail users (regulatory complications — the protocol explicitly avoids custody)
 
 ## Architecture summary
 
@@ -158,6 +154,21 @@ Three settlement paths total. No mutual-deadlock state ever exists. Either the l
 
 See [SPEC.md](./SPEC.md) for the full protocol.
 
+## Use cases
+
+- Peer-to-peer collateralized loans between any two parties — pseudonymous via VerusIDs, fully private via R-addresses
+- History-filtered marketplace lending: lenders post offers to their VerusID multimap; borrowers filter by on-chain history (`loan.history.v1`)
+- Cross-currency loans (e.g. VRSC collateral, DAI principal) — any currency Verus's currency layer supports
+- Collateralized lending within communities (members lending to other members under a shared parent ID convention)
+- Private loans between businesses or individuals who already know each other
+
+## What it is NOT for
+
+- High-frequency margin trading
+- Variable-rate or amortizing loans (pre-signed Tx-Repay output amounts are fixed at origination)
+- Loans where parties may want to renegotiate or abandon mid-term without cooperation
+- Custodial lending platforms with retail users (regulatory complications — the protocol explicitly avoids custody)
+
 ## Wallet integration
 
 The recipes are written so they can be run from a stock Verus daemon, but the natural home for this protocol is a wallet. The recipes' multi-step ceremonies (origination, cooperative pre-signing, template storage, exercise/repay, expiration) map cleanly onto wallet UX:
@@ -169,12 +180,24 @@ The recipes are written so they can be run from a stock Verus daemon, but the na
 
 Verus Wallet V2 (Chrome extension, non-custodial, direct daemon RPC) is the reference target. The `extend_tx.py` helper logic (~80 lines of tx serialization) ports directly to the wallet's TypeScript codebase. The recipes serve as both a runnable reference for power users and the spec a wallet implementor would follow.
 
+## Why it matters
+
+This is what private secured lending looked like before banks: two parties, a notarized agreement, time-based defaults. Existing crypto lending products that work today (Ledn, Unchained, Arch) re-create that model with corporate operators. The Make Protocol re-creates it with cryptographic enforcement instead — the chain is the notary, the parties are themselves, and the lender's commitment is enforced by signature mechanics rather than by external accountability.
+
+The protocol is intentionally minimal:
+
+- No on-chain dispute resolution (use courts; chain provides evidence)
+- No oracle dependency (no margin calls, no liquidation bots)
+- No protocol-controlled treasury or fee
+- No DAO governance
+- No proprietary token
+- No panic button or recovery authority — the protocol does exactly three things: settle, default, or rescue
+
 ## Relationship to other Verus lending efforts
 
 This protocol is a **peer-to-peer fixed-term primitive**. It's complementary to other lending models the Verus ecosystem may support:
 
 - **Basket-based pool lending** (a future Verus direction): currency baskets become lending pools with dynamic interest rates based on collateral/loan ratios; LPs earn fees by holding basket tokens; margin call enforcement via import rollup or validator-incentivized redemption. Best fit for retail / anonymous / market-rate lending. Different model from the Make Protocol — different use case.
-
 - **Template outputs** (a future Verus feature): non-spending outputs that act as cross-tx constraints requiring a matching companion output with specified fields. When this lands, it would simplify some of the patterns we currently express via SIGHASH manipulation, and could enable cleaner vault-makes-offer designs that solve the empty-Pay-ID problem we encountered during testing.
 
 The Make Protocol's loan primitive serves the use case where two known parties want to enter a private, fixed-term, fixed-rate loan with cryptographic atomic settlement. Mike's basket-based lending vision serves the use case where anyone wants to borrow at market rates from a pooled liquidity source. Both should exist.
@@ -186,3 +209,18 @@ This is a working draft. Spec contributions, implementation work, and security r
 ## Acknowledgments
 
 Built on Verus's identity, currency, raw-transaction, and SIGHASH primitives. The Verus marketplace's `makeoffer` / `takeoffer` mechanism uses `SIGHASH_SINGLE | ANYONECANPAY` for offer construction; the canonical Tx-Repay / Tx-B / Tx-C templates in this spec use the same SIGHASH flag at the raw-tx level — no marketplace dependency. Origination Tx-A uses default `SIGHASH_ALL` cooperative cosign. Design also borrows ideas from Bitcoin's `nLockTime` semantics and Lightning Network's pre-signed transaction patterns (HTLCs).
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
+## Disclaimer
+
+This specification and the accompanying recipes / helpers are provided **"AS IS"**, without warranty of any kind, express or implied. In no event shall the authors or copyright holders be liable for any claim, damages, or other liability arising from the use of this specification or any implementation of it.
+
+Make Protocol contracts settle real funds on a live blockchain. Before originating, settling, or claiming on a loan, option, escrow, or swap built on this protocol:
+
+- Verify the raw transactions byte-by-byte against the SPEC and SCHEMA before broadcast
+- Test against your own mainnet identities with tiny amounts before scaling
+- Treat any reference client (including [make-gui](https://github.com/Fried333/make-gui)) as a convenience — the chain is the source of truth, not the GUI
+- Have a recovery plan for lost templates, lost keys, and stonewalled counterparties (the protocol design makes lender stonewalling structurally impossible, but template loss on either side is your responsibility)
